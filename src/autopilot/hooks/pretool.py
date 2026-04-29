@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv(Path.home() / ".autopilot" / ".env")
 
 from autopilot.config import get_project_id, constraints
-from autopilot.tracker import init_db, load_active_run, save_run, save_subagent_event, get_cost_today
+from autopilot.tracker import Phase, init_db, load_active_run, save_run, save_subagent_event, get_cost_today
 from autopilot.observe import trace_subagent
 
 
@@ -109,12 +109,25 @@ def main() -> None:
         if allowed_cmds and base_cmd and base_cmd not in allowed_cmds:
             block(f"Bash command '{base_cmd}' not in allowed_bash_commands whitelist.")
 
-    # ── Step counter ──────────────────────────────────────────────────────────
+    # ── Step counter (weighted) ───────────────────────────────────────────────
     if run and tool_name not in ("", "Agent"):
-        max_steps = run.max_steps or c.get("max_steps_per_run", 20)
-        if run.current_step >= max_steps:
-            block(f"Step limit reached ({run.current_step}/{max_steps}). Stop and summarize progress.")
+        # Determine per-tool weight from constraints; fall back to default.
+        tool_weights = c.get("tool_weights", {})
+        weight = float(tool_weights.get(tool_name, tool_weights.get("default", 1.0)))
+
+        # Effective budget: phase-specific override > run.max_steps > global fallback.
+        phase_budgets = c.get("phase_step_budgets", {})
+        phase_budget = phase_budgets.get(run.phase.value)
+        effective_max = float(phase_budget if phase_budget is not None else (run.max_steps or c.get("max_steps_per_run", 20)))
+
+        if run.step_budget_used >= effective_max:
+            block(
+                f"Step budget exhausted ({run.step_budget_used:.1f}/{effective_max:.0f} weighted steps). "
+                "Stop and summarize progress."
+            )
+
         run.current_step += 1
+        run.step_budget_used += weight
         save_run(run)
 
     allow()

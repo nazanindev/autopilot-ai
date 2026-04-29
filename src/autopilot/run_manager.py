@@ -5,7 +5,7 @@ import os
 from autopilot.tracker import RunState, Phase, RunStatus, save_run, load_run, load_active_run
 from autopilot.context import build_briefing, summarize_for_new_session
 from autopilot.observe import trace_run_event
-from autopilot.config import get_project_id, get_branch
+from autopilot.config import get_project_id, get_branch, constraints
 
 
 def _anthropic():
@@ -45,10 +45,15 @@ def add_decision(run: RunState, decision: str) -> RunState:
 
 
 def set_plan_steps(run: RunState, steps: list) -> RunState:
-    """Replace plan steps (called when ExitPlanMode fires)."""
+    """Replace plan steps and derive a weighted step budget from plan length."""
     run.plan_steps = steps
+    if steps:
+        c = constraints()
+        multiplier = float(c.get("plan_steps_multiplier", 3.0))
+        fallback = int(c.get("max_steps_per_run", 20))
+        run.max_steps = max(fallback, round(len(steps) * multiplier))
     save_run(run)
-    trace_run_event(run.run_id, run.project, "plan_set", {"step_count": len(steps)})
+    trace_run_event(run.run_id, run.project, "plan_set", {"step_count": len(steps), "max_steps": run.max_steps})
     return run
 
 
@@ -83,6 +88,14 @@ def get_or_create_run(project: str, goal: str = "") -> RunState:
     if not goal:
         raise ValueError("No active run and no goal provided")
     return create_run(goal)
+
+
+def save_pr_url(run: RunState, pr_url: str) -> RunState:
+    """Record the PR URL on the run after shipping."""
+    run.pr_url = pr_url
+    save_run(run)
+    trace_run_event(run.run_id, run.project, "pr_created", {"pr_url": pr_url, "cost_usd": run.cost_usd})
+    return run
 
 
 def get_session_briefing(run: RunState) -> str:
