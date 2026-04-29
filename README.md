@@ -115,8 +115,10 @@ Your answers: JWT only, no social
 | `/budget $X` | Set session budget gate |
 | `/new` | Compress context, start fresh session with RunState injected |
 | `/compact` | Same as `/new` |
-| `/resume <run_id>` | Resume an interrupted run |
+| `/resume [run_id]` | Resume an interrupted run (picker if no ID given) |
 | `/skip-plan` | Skip planning, go straight to execute |
+| `/verify` | Run tests/lint for current project |
+| `/ship` | Verify → commit → create PR |
 | `/done` | Mark current run complete |
 | `/status` | Show run state + cost |
 | `/quit` | Exit |
@@ -125,12 +127,15 @@ Your answers: JWT only, no social
 
 ```sh
 ap                     # launch interactive REPL
-ap status              # today's cost + active run
+ap status              # today's cost + active run (with budget bar + projected cost)
 ap stats               # cost breakdown by project
 ap stats --project foo # filter by project
 ap route "review PR"   # recommend model tier for a task description
-ap ship                # commit + create PR (Day 2)
-ap serve               # start local API on :7331 (Day 2)
+ap verify              # run tests/lint for the current project
+ap ship                # verify → AI commit message → git commit → AI PR description → gh pr create
+ap resume [run-id]     # resume an interrupted run (shows picker if no ID given)
+ap serve               # local cost dashboard on :7331
+ap ci-review --pr 42   # AI code review for a PR (used by GitHub Actions)
 ```
 
 ---
@@ -198,10 +203,38 @@ Cost is also stored locally in `~/.autopilot/costs.duckdb` and queryable at any 
 
 ---
 
-## Day 2 (coming)
+## Style
 
-- `ap ship` — AI-generated commit message + `gh pr create` with AI-written PR description
-- GitHub Actions AI code reviewer — two-pass Haiku → Sonnet, posts structured PR comment
-- `ap serve` — FastAPI on `:7331` for a local cost dashboard
-- Verification layer — auto-run tests + lint after execute phase, blocks ship if failing
-- `ap resume` — pick up interrupted runs from the last successful step
+Autopilot injects your personal style into every AI-generated artifact. `ap init` creates `~/.autopilot/style.yaml` with defaults — edit what you care about, set a section to `null` to skip it entirely:
+
+```yaml
+commit_message:
+  format: "short, imperative, no label prefix"
+  max_length: 72
+
+pr_title:
+  format: "plain description, sentence case, no prefix brackets"
+
+pr_body: |
+  ## What
+  {what}
+
+  ## Why
+  {why}
+
+  ## Checklist
+  - [ ] tests pass
+
+ci_review:
+  tone: "direct, no filler, flag real issues only"
+  severity_labels: [blocker, suggestion, nit]
+
+agent:
+  verbosity: concise
+  emoji: false
+  confirm_before_destructive: true
+```
+
+Per-repo overrides: create `.ap-style.yaml` in the repo root. It deep-merges on top of the global file.
+
+Each call site only receives the sections it needs — no context bloat.

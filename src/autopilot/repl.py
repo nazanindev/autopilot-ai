@@ -105,6 +105,11 @@ class AutopilotREPL:
                 console.print("[dim]→ Skipped planning phase → execute[/dim]")
         elif verb == "/status":
             self._show_status()
+        elif verb == "/verify":
+            self._run_verify()
+        elif verb == "/ship":
+            from autopilot.commands.ship import cmd_ship
+            cmd_ship()
         elif verb == "/done":
             self._finish_run()
         elif verb in ("/quit", "/exit", "/q"):
@@ -138,13 +143,54 @@ class AutopilotREPL:
         self._new_session()
 
     def _resume(self, run_id: str) -> None:
-        from autopilot.tracker import load_run
+        from autopilot.tracker import load_run, get_recent_runs, RunStatus
+        if run_id:
+            r = load_run(run_id)
+            if not r:
+                console.print(f"[red]Run {run_id} not found.[/red]")
+                return
+            self.run = r
+            console.print(f"[green]✓ Resumed run {run_id}: {r.goal}[/green]")
+            return
+
+        # No ID given — show picker of recent incomplete runs
+        runs = [r for r in get_recent_runs(limit=10) if r["status"] != RunStatus.complete.value]
+        if not runs:
+            console.print("[yellow]No incomplete runs found.[/yellow]")
+            return
+
+        console.print("\n[bold]Recent incomplete runs:[/bold]")
+        for i, r in enumerate(runs, 1):
+            console.print(
+                f"  [cyan]{i}.[/cyan] [{r['run_id']}] {r['goal'][:60]}  "
+                f"[dim]{r['phase']} · ${r['cost_usd']:.4f}[/dim]"
+            )
+
+        try:
+            choice = self.session.prompt("Pick a run (number or ID): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return
+
+        if choice.isdigit() and 1 <= int(choice) <= len(runs):
+            run_id = runs[int(choice) - 1]["run_id"]
+        else:
+            run_id = choice
+
         r = load_run(run_id)
         if not r:
             console.print(f"[red]Run {run_id} not found.[/red]")
             return
         self.run = r
         console.print(f"[green]✓ Resumed run {run_id}: {r.goal}[/green]")
+
+    def _run_verify(self) -> None:
+        from autopilot.commands.verify import run_checks
+        passed, output = run_checks()
+        if passed:
+            console.print("[green]✓ Verification passed[/green]")
+        else:
+            console.print("[red]✗ Verification failed[/red]")
+            console.print(f"[dim]{output[-1500:]}[/dim]")
 
     def _finish_run(self) -> None:
         if not self.run:
@@ -179,7 +225,9 @@ class AutopilotREPL:
             "  /budget $X     → set session budget gate\n"
             "  /skip-plan     → skip planning, go straight to execute\n\n"
             "[bold]Run lifecycle:[/bold]\n"
-            "  /resume <id>   → resume an interrupted run\n"
+            "  /resume [id]   → resume an interrupted run (picker if no ID)\n"
+            "  /verify        → run tests/lint for current project\n"
+            "  /ship          → verify → commit → create PR\n"
             "  /done          → mark current run complete\n"
             "  /status        → show current run + cost\n"
             "  /quit          → exit autopilot",

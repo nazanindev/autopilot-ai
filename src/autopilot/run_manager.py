@@ -44,6 +44,24 @@ def add_decision(run: RunState, decision: str) -> RunState:
     return run
 
 
+def set_plan_steps(run: RunState, steps: list) -> RunState:
+    """Replace plan steps (called when ExitPlanMode fires)."""
+    run.plan_steps = steps
+    save_run(run)
+    trace_run_event(run.run_id, run.project, "plan_set", {"step_count": len(steps)})
+    return run
+
+
+def complete_plan_step(run: RunState, step_id: str) -> RunState:
+    """Mark a single plan step as done."""
+    for step in run.plan_steps:
+        if step.get("id") == step_id:
+            step["status"] = "done"
+            break
+    save_run(run)
+    return run
+
+
 def complete_run(run: RunState) -> RunState:
     run.status = RunStatus.complete
     save_run(run)

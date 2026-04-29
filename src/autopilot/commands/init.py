@@ -9,7 +9,43 @@ console = Console()
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 AP_ENV_PATH = Path.home() / ".autopilot" / ".env"
+AP_STYLE_PATH = Path.home() / ".autopilot" / "style.yaml"
 AP_ENV_EXAMPLE = Path(__file__).parent.parent.parent.parent / ".env.example"
+
+DEFAULT_STYLE = """\
+# Autopilot style — controls AI voice across all outputs.
+# Set any section to null (or delete it) to skip that style injection entirely.
+
+agent:
+  verbosity: concise          # concise | verbose
+  emoji: false
+  confirm_before_destructive: true
+
+commit_message:
+  format: "short, imperative, no label prefix"
+  # e.g. "add JWT middleware" not "feat: add JWT middleware"
+  max_length: 72
+
+pr_title:
+  format: "plain description, sentence case, no prefix brackets"
+  # e.g. "Add rate limiting to the API" not "[Feature] add rate limiting"
+
+pr_body: |
+  ## What
+  {what}
+
+  ## Why
+  {why}
+
+  ## Checklist
+  - [ ] tests pass
+  - [ ] no new dependencies without justification
+
+ci_review:
+  tone: "direct, no filler, flag real issues only"
+  severity_labels: [blocker, suggestion, nit]
+  skip_nitpicks: false
+"""
 
 HOOKS = {
     "Stop": [
@@ -33,6 +69,12 @@ def cmd_init(force: bool = False) -> None:
         console.print(f"[yellow]Created {AP_ENV_PATH} — fill in your API keys.[/yellow]")
     else:
         console.print(f"[dim]Env file already exists: {AP_ENV_PATH}[/dim]")
+
+    if not AP_STYLE_PATH.exists():
+        AP_STYLE_PATH.write_text(DEFAULT_STYLE)
+        console.print(f"[green]✓ Created {AP_STYLE_PATH}[/green]")
+    else:
+        console.print(f"[dim]Style file already exists: {AP_STYLE_PATH}[/dim]")
 
     # ── Read existing Claude Code settings ───────────────────────────────────
     settings = {}

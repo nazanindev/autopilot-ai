@@ -1,7 +1,7 @@
 """Langfuse observability wrapper + local logging."""
 import os
 from typing import Optional
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 
 
 def _client():

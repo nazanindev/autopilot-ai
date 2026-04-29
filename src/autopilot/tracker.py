@@ -38,6 +38,7 @@ class RunState:
     max_steps: int = 20
     artifacts: list = field(default_factory=list)
     decisions: list = field(default_factory=list)
+    plan_steps: list = field(default_factory=list)  # [{"id": "1", "description": "...", "status": "pending|done|skipped"}]
     status: RunStatus = RunStatus.active
     context_summary: str = ""
     cost_usd: float = 0.0
@@ -63,6 +64,7 @@ def init_db() -> None:
                 max_steps INTEGER,
                 artifacts JSON,
                 decisions JSON,
+                plan_steps JSON,
                 status VARCHAR,
                 context_summary TEXT,
                 cost_usd DOUBLE,
@@ -71,6 +73,11 @@ def init_db() -> None:
                 updated_at VARCHAR
             )
         """)
+        # Migrate existing tables that predate plan_steps
+        try:
+            con.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS plan_steps JSON")
+        except Exception:
+            pass
         con.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id VARCHAR PRIMARY KEY,
@@ -106,11 +113,12 @@ def save_run(run: RunState) -> None:
     run.updated_at = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute("""
-            INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, [
             run.run_id, run.project, run.branch, run.goal,
             run.phase.value, run.current_step, run.max_steps,
             json.dumps(run.artifacts), json.dumps(run.decisions),
+            json.dumps(run.plan_steps),
             run.status.value, run.context_summary, run.cost_usd,
             run.model, run.created_at, run.updated_at,
         ])
@@ -124,11 +132,12 @@ def load_run(run_id: str) -> Optional[RunState]:
     if not row:
         return None
     cols = ["run_id","project","branch","goal","phase","current_step","max_steps",
-            "artifacts","decisions","status","context_summary","cost_usd","model",
+            "artifacts","decisions","plan_steps","status","context_summary","cost_usd","model",
             "created_at","updated_at"]
     d = dict(zip(cols, row))
-    d["artifacts"] = json.loads(d["artifacts"])
-    d["decisions"] = json.loads(d["decisions"])
+    d["artifacts"] = json.loads(d["artifacts"] or "[]")
+    d["decisions"] = json.loads(d["decisions"] or "[]")
+    d["plan_steps"] = json.loads(d["plan_steps"] or "[]")
     d["phase"] = Phase(d["phase"])
     d["status"] = RunStatus(d["status"])
     return RunState(**{k: v for k, v in d.items() if k in RunState.__dataclass_fields__})

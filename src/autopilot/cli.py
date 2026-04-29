@@ -41,9 +41,52 @@ def stats(project: Optional[str] = typer.Option(None, "--project", "-p", help="F
 
 @app.command()
 def ship() -> None:
-    """Commit changes, create PR with AI-generated description."""
+    """Verify tests, commit with AI message, create PR with AI description."""
     from autopilot.commands.ship import cmd_ship
     cmd_ship()
+
+
+@app.command()
+def verify() -> None:
+    """Run tests/lint for the current project."""
+    from autopilot.commands.verify import cmd_verify
+    cmd_verify()
+
+
+@app.command()
+def resume(run_id: Optional[str] = typer.Argument(None, help="Run ID to resume (shows picker if omitted)")) -> None:
+    """Resume an interrupted run. Shows a picker if no run ID is given."""
+    from autopilot.tracker import init_db, load_run, get_recent_runs, RunStatus
+    from rich.console import Console
+    c = Console()
+    init_db()
+
+    if not run_id:
+        runs = [r for r in get_recent_runs(limit=10) if r["status"] != RunStatus.complete.value]
+        if not runs:
+            c.print("[yellow]No incomplete runs found.[/yellow]")
+            raise typer.Exit()
+        c.print("\n[bold]Recent incomplete runs:[/bold]")
+        for i, r in enumerate(runs, 1):
+            c.print(
+                f"  [cyan]{i}.[/cyan] [{r['run_id']}] {r['goal'][:60]}  "
+                f"[dim]{r['phase']} · ${r['cost_usd']:.4f}[/dim]"
+            )
+        run_id = typer.prompt("Run ID to resume")
+
+    r = load_run(run_id)
+    if not r:
+        c.print(f"[red]Run {run_id} not found.[/red]")
+        raise typer.Exit(1)
+
+    c.print(f"[green]Resuming run {r.run_id}:[/green] {r.goal}")
+    c.print(f"[dim]Phase: {r.phase.value} | Steps: {r.current_step}/{r.max_steps} | Cost: ${r.cost_usd:.4f}[/dim]")
+    if r.plan_steps:
+        c.print("\n[bold]Plan steps:[/bold]")
+        for s in r.plan_steps:
+            marker = "[green]✓[/green]" if s.get("status") == "done" else "○"
+            c.print(f"  {marker} {s['description']}")
+    c.print("\n[dim]Start the REPL with `ap` and use /resume to continue in an interactive session.[/dim]")
 
 
 @app.command(name="ci-review")

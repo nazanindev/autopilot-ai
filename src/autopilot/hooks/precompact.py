@@ -43,6 +43,11 @@ def main() -> None:
 - Status: {run.status.value}
 - Cost so far: ${run.cost_usd:.4f}
 """
+        if run.plan_steps:
+            context_addon += "\n### Plan Steps\n"
+            for s in run.plan_steps:
+                marker = "x" if s.get("status") == "done" else " "
+                context_addon += f"- [{marker}] {s['description']}\n"
 
     output = {
         "summary_prompt": COMPACTION_PROMPT + context_addon,
