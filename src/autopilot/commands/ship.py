@@ -9,7 +9,7 @@ from rich.panel import Panel
 
 from autopilot.config import get_project_id, load_style, style_prompt
 from autopilot.tracker import init_db, load_active_run, Phase, RunStatus
-from autopilot.run_manager import advance_phase, complete_run
+from autopilot.run_manager import advance_phase, complete_run, save_pr_url
 from autopilot.commands.verify import run_checks
 
 console = Console()
@@ -150,12 +150,13 @@ def cmd_ship() -> None:
 
     # ── 7. Advance run to ship + complete ─────────────────────────────────────
     if run:
+        save_pr_url(run, pr_url)
         advance_phase(run, Phase.ship)
         complete_run(run)
         console.print(Panel(
             f"[bold green]Run complete[/bold green]\n"
             f"Goal: {run.goal[:80]}\n"
-            f"Total cost: ${run.cost_usd:.4f}\n"
+            f"Total cost: ${run.cost_usd:.4f} | Budget used: {run.step_budget_used:.1f} steps\n"
             f"PR: {pr_url}",
             border_style="green",
         ))

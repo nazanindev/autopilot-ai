@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from autopilot.tracker import init_db, get_cost_today, get_project_stats, get_recent_runs, load_active_run
+from autopilot.tracker import init_db, get_cost_today, get_project_stats, get_recent_runs, get_cost_per_pr, load_active_run
 from autopilot.config import get_project_id, constraints
 
 console = Console()
@@ -38,11 +38,17 @@ def cmd_status() -> None:
         if run.current_step > 0:
             projected = run.cost_usd / run.current_step * run.max_steps
 
+        c = constraints()
+        phase_budgets = c.get("phase_step_budgets", {})
+        phase_budget = phase_budgets.get(run.phase.value)
+        effective_max = float(phase_budget if phase_budget is not None else run.max_steps)
+
         lines += [
             "",
             f"[bold yellow]Active run:[/bold yellow] {run.run_id}",
             f"[bold]Goal:[/bold] {run.goal[:80]}",
-            f"[bold]Phase:[/bold] {run.phase.value} | step {run.current_step}/{run.max_steps}",
+            f"[bold]Phase:[/bold] {run.phase.value} | step {run.current_step}/{run.max_steps}"
+            f" | budget {run.step_budget_used:.1f}/{effective_max:.0f}",
             f"[bold]Run cost:[/bold] ${run.cost_usd:.4f}"
             + (f"  →  ~${projected:.4f} projected" if projected else ""),
         ]
@@ -111,3 +117,24 @@ def cmd_stats(project_filter=None) -> None:
                 row["updated_at"][:10] if row["updated_at"] else "—",
             )
         console.print(r)
+
+    # Cost per PR
+    pr_runs = get_cost_per_pr(project_filter)
+    if pr_runs:
+        p = Table(title="Cost per PR", show_lines=True)
+        p.add_column("Run ID", style="dim")
+        p.add_column("Goal")
+        p.add_column("PR")
+        p.add_column("Cost", justify="right")
+        p.add_column("Budget used", justify="right")
+        p.add_column("Shipped")
+        for row in pr_runs:
+            p.add_row(
+                row["run_id"],
+                row["goal"][:40],
+                row["pr_url"],
+                f"${row['cost_usd']:.4f}",
+                f"{row['step_budget_used']:.1f}",
+                row["updated_at"][:10] if row["updated_at"] else "—",
+            )
+        console.print(p)

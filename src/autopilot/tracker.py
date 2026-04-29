@@ -45,6 +45,10 @@ class RunState:
     model: str = "claude-sonnet-4-6"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # Weighted step budget: accumulates fractional costs per tool type.
+    step_budget_used: float = 0.0
+    # PR URL written by `ap ship` once the PR is created.
+    pr_url: str = ""
 
 
 def _conn() -> duckdb.DuckDBPyConnection:
@@ -70,14 +74,21 @@ def init_db() -> None:
                 cost_usd DOUBLE,
                 model VARCHAR,
                 created_at VARCHAR,
-                updated_at VARCHAR
+                updated_at VARCHAR,
+                step_budget_used DOUBLE,
+                pr_url VARCHAR
             )
         """)
-        # Migrate existing tables that predate plan_steps
-        try:
-            con.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS plan_steps JSON")
-        except Exception:
-            pass
+        # Migrations for columns added after initial schema
+        for migration in [
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS plan_steps JSON",
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS step_budget_used DOUBLE DEFAULT 0.0",
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_url VARCHAR DEFAULT ''",
+        ]:
+            try:
+                con.execute(migration)
+            except Exception:
+                pass
         con.execute("""
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id VARCHAR PRIMARY KEY,
@@ -113,7 +124,14 @@ def save_run(run: RunState) -> None:
     run.updated_at = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute("""
-            INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            INSERT OR REPLACE INTO runs (
+                run_id, project, branch, goal,
+                phase, current_step, max_steps,
+                artifacts, decisions, plan_steps,
+                status, context_summary, cost_usd,
+                model, created_at, updated_at,
+                step_budget_used, pr_url
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, [
             run.run_id, run.project, run.branch, run.goal,
             run.phase.value, run.current_step, run.max_steps,
@@ -121,25 +139,28 @@ def save_run(run: RunState) -> None:
             json.dumps(run.plan_steps),
             run.status.value, run.context_summary, run.cost_usd,
             run.model, run.created_at, run.updated_at,
+            run.step_budget_used, run.pr_url,
         ])
 
 
 def load_run(run_id: str) -> Optional[RunState]:
+    cols = ["run_id", "project", "branch", "goal", "phase", "current_step", "max_steps",
+            "artifacts", "decisions", "plan_steps", "status", "context_summary", "cost_usd",
+            "model", "created_at", "updated_at", "step_budget_used", "pr_url"]
     with _conn() as con:
         row = con.execute(
-            "SELECT * FROM runs WHERE run_id = ?", [run_id]
+            f"SELECT {', '.join(cols)} FROM runs WHERE run_id = ?", [run_id]
         ).fetchone()
     if not row:
         return None
-    cols = ["run_id","project","branch","goal","phase","current_step","max_steps",
-            "artifacts","decisions","plan_steps","status","context_summary","cost_usd","model",
-            "created_at","updated_at"]
     d = dict(zip(cols, row))
     d["artifacts"] = json.loads(d["artifacts"] or "[]")
     d["decisions"] = json.loads(d["decisions"] or "[]")
     d["plan_steps"] = json.loads(d["plan_steps"] or "[]")
     d["phase"] = Phase(d["phase"])
     d["status"] = RunStatus(d["status"])
+    d["step_budget_used"] = float(d["step_budget_used"] or 0.0)
+    d["pr_url"] = d["pr_url"] or ""
     return RunState(**{k: v for k, v in d.items() if k in RunState.__dataclass_fields__})
 
 
@@ -209,6 +230,25 @@ def get_project_stats() -> list:
             ORDER BY total_cost DESC
         """).fetchall()
     cols = ["project", "sessions", "total_cost", "total_tokens", "last_active"]
+    return [dict(zip(cols, r)) for r in rows]
+
+
+def get_cost_per_pr(project: Optional[str] = None) -> list:
+    """Return cost + step stats for all shipped runs that have a PR URL."""
+    with _conn() as con:
+        if project:
+            rows = con.execute("""
+                SELECT run_id, goal, pr_url, cost_usd, step_budget_used, updated_at
+                FROM runs WHERE pr_url != '' AND pr_url IS NOT NULL AND project = ?
+                ORDER BY updated_at DESC
+            """, [project]).fetchall()
+        else:
+            rows = con.execute("""
+                SELECT run_id, goal, pr_url, cost_usd, step_budget_used, updated_at
+                FROM runs WHERE pr_url != '' AND pr_url IS NOT NULL
+                ORDER BY updated_at DESC
+            """).fetchall()
+    cols = ["run_id", "goal", "pr_url", "cost_usd", "step_budget_used", "updated_at"]
     return [dict(zip(cols, r)) for r in rows]
 
 

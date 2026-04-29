@@ -3,6 +3,33 @@ max_tokens_per_step: 8000
 budget_gate_usd: 2.00
 context_warn_pct: 0.80
 
+# Weighted step budget — each tool call deducts its weight from the budget.
+# Heavy tools (writes, bash) cost more than reads/searches.
+tool_weights:
+  Write: 2.0
+  Edit: 1.5
+  MultiEdit: 2.5
+  Bash: 1.5
+  Agent: 5.0
+  Read: 0.5
+  Glob: 0.25
+  Grep: 0.25
+  WebFetch: 0.5
+  WebSearch: 0.5
+  default: 1.0
+
+# Per-phase step budgets (weighted). Overrides max_steps_per_run when set.
+phase_step_budgets:
+  clarify: 10.0
+  plan: 20.0
+  execute: 50.0
+  verify: 20.0
+  ship: 10.0
+
+# When plan steps are parsed from ExitPlanMode, max_steps is set to
+# len(plan_steps) * this multiplier (minimum: max_steps_per_run).
+plan_steps_multiplier: 3.0
+
 allowed_bash_commands:
   - git
   - pytest

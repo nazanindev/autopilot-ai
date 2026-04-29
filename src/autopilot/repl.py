@@ -52,8 +52,9 @@ class AutopilotREPL:
             model_short = model.split("-")[1] if "-" in model else model
             phase = self.run.phase.value
             step = f"{self.run.current_step}/{self.run.max_steps}"
+            budget = f"{self.run.step_budget_used:.1f}"
             cost = f"${self.run.cost_usd:.2f}"
-            parts.append(f"{phase}:{model_short}|step:{step}|{cost}")
+            parts.append(f"{phase}:{model_short}|step:{step}|wt:{budget}|{cost}")
         else:
             parts.append(f"project:{self.project}")
         flags = []
