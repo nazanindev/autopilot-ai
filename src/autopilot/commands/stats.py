@@ -1,12 +1,22 @@
 """ap status and ap stats commands."""
+import os
+
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
 from autopilot.tracker import init_db, get_cost_today, get_project_stats, get_recent_runs, load_active_run
-from autopilot.config import get_project_id
+from autopilot.config import get_project_id, constraints
 
 console = Console()
+
+
+def _budget_bar(used: float, total: float, width: int = 20) -> str:
+    pct = min(used / total, 1.0) if total > 0 else 0
+    filled = int(pct * width)
+    bar = "█" * filled + "░" * (width - filled)
+    color = "red" if pct >= 0.9 else "yellow" if pct >= 0.6 else "green"
+    return f"[{color}]{bar}[/{color}] {pct*100:.0f}%"
 
 
 def cmd_status() -> None:
@@ -15,20 +25,35 @@ def cmd_status() -> None:
     today = get_cost_today()
     project_today = get_cost_today(project)
     run = load_active_run(project)
+    c = constraints()
+    budget_gate = float(os.getenv("AP_BUDGET_USD") or c.get("budget_gate_usd", 2.0))
 
     lines = [
         f"[bold]Project:[/bold] {project}",
-        f"[bold]Today (this project):[/bold] ${project_today:.4f}",
+        f"[bold]Today (this project):[/bold] ${project_today:.4f}  {_budget_bar(project_today, budget_gate)}  of ${budget_gate:.2f} budget",
         f"[bold]Today (all projects):[/bold] ${today:.4f}",
     ]
     if run:
+        projected = None
+        if run.current_step > 0:
+            projected = run.cost_usd / run.current_step * run.max_steps
+
         lines += [
             "",
             f"[bold yellow]Active run:[/bold yellow] {run.run_id}",
             f"[bold]Goal:[/bold] {run.goal[:80]}",
             f"[bold]Phase:[/bold] {run.phase.value} | step {run.current_step}/{run.max_steps}",
-            f"[bold]Run cost:[/bold] ${run.cost_usd:.4f}",
+            f"[bold]Run cost:[/bold] ${run.cost_usd:.4f}"
+            + (f"  →  ~${projected:.4f} projected" if projected else ""),
         ]
+
+        if run.plan_steps:
+            done = sum(1 for s in run.plan_steps if s.get("status") == "done")
+            total_steps = len(run.plan_steps)
+            lines.append(f"[bold]Plan:[/bold] {done}/{total_steps} steps done")
+            for s in run.plan_steps:
+                marker = "[green]✓[/green]" if s.get("status") == "done" else "○"
+                lines.append(f"  {marker} {s['description']}")
     else:
         lines.append("\n[dim]No active run.[/dim]")
 
