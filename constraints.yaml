@@ -1,0 +1,39 @@
+max_steps_per_run: 20
+max_tokens_per_step: 8000
+budget_gate_usd: 2.00
+context_warn_pct: 0.80
+
+allowed_bash_commands:
+  - git
+  - pytest
+  - python
+  - python3
+  - uv
+  - pip
+  - npm
+  - npx
+  - node
+  - gh
+  - cat
+  - ls
+  - find
+  - grep
+  - rg
+  - head
+  - tail
+  - echo
+  - mkdir
+  - cp
+  - mv
+  - diff
+  - wc
+  - jq
+  - curl
+
+# Agent tool spawns only allowed during plan phase
+agent_spawns_allowed_in:
+  - plan
+
+# Write operations restricted to project root
+allowed_write_paths:
+  - "./"

@@ -1,0 +1,16 @@
+phases:
+  plan: claude-opus-4-5
+  execute: claude-sonnet-4-6
+  fast: claude-haiku-4-5-20251001
+  ci: claude-haiku-4-5-20251001
+
+# Task keyword overrides (checked before phase routing)
+task_overrides:
+  architecture: claude-opus-4-5
+  design: claude-opus-4-5
+  refactor: claude-sonnet-4-6
+  review: claude-sonnet-4-6
+  test: claude-sonnet-4-6
+  fix: claude-sonnet-4-6
+  quick: claude-haiku-4-5-20251001
+  explain: claude-haiku-4-5-20251001
