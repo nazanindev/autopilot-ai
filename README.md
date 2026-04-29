@@ -1,6 +1,6 @@
 # Autopilot (`ap`)
 
-Personal AI dev harness built around Claude Code. Tracks cost passively, controls subagent spawning, manages run state explicitly, and automates the PR + review workflow.
+A cost-aware CLI workflow for AI-assisted development: prompt → patch → PR → review → merge. Optimized for minimal context, controlled token usage, and human-in-the-loop iteration.
 
 ## The problem
 
