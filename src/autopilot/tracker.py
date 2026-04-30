@@ -13,7 +13,6 @@ from autopilot.config import DB_PATH
 
 
 class Phase(str, Enum):
-    clarify = "clarify"
     plan = "plan"
     execute = "execute"
     verify = "verify"
@@ -33,7 +32,7 @@ class RunState:
     project: str
     branch: str
     run_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
-    phase: Phase = Phase.clarify
+    phase: Phase = Phase.plan
     current_step: int = 0
     max_steps: int = 20
     artifacts: list = field(default_factory=list)
