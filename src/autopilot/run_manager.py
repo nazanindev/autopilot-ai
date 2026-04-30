@@ -69,6 +69,7 @@ def complete_plan_step(run: RunState, step_id: str) -> RunState:
 
 def complete_run(run: RunState) -> RunState:
     run.status = RunStatus.complete
+    run.claude_session_id = ""
     save_run(run)
     trace_run_event(run.run_id, run.project, "run_complete", {
         "api_spend_usd": run.cost_usd,
@@ -82,6 +83,7 @@ def complete_run(run: RunState) -> RunState:
 def refresh_context_summary(run: RunState) -> RunState:
     """Compress run state into a tight context summary using Haiku."""
     run.context_summary = summarize_for_new_session(run, _anthropic())
+    run.claude_session_id = ""
     save_run(run)
     return run
 

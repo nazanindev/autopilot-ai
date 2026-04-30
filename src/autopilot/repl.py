@@ -1,26 +1,46 @@
 """
 Autopilot REPL — persistent interactive session.
-Manages run lifecycle, phase switching, and Claude Code subprocess launch.
+Manages run lifecycle, phase switching, and Claude Code headless launch (`claude -p`).
 """
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.text import Text
 
-from autopilot.config import get_project_id, get_branch, get_plan, get_plan_window_caps
+from autopilot.config import constraints, get_project_id, get_branch, get_plan, get_plan_window_caps
 from autopilot.router import MODEL_ALIASES, model_for
 from autopilot.tracker import (
     Phase, RunStatus, init_db, load_active_run, save_run,
     get_api_spend_today, get_window_usage,
 )
+
+
+def _parse_claude_json_stdout(raw_out: str) -> Optional[Dict[str, Any]]:
+    """Parse final JSON object from `claude -p --output-format json` stdout."""
+    raw_out = (raw_out or "").strip()
+    if not raw_out:
+        return None
+    try:
+        return json.loads(raw_out)
+    except json.JSONDecodeError:
+        pass
+    for line in reversed(raw_out.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    return None
 from autopilot.run_manager import (
     create_run, advance_phase, refresh_context_summary,
     add_artifact, add_decision, complete_run, get_session_briefing
@@ -306,7 +326,7 @@ class AutopilotREPL:
         console.print("\n" + "\n".join(lines))
 
     def _launch_claude(self, task: str) -> None:
-        """Launch claude with the RunState briefing + phase directive pre-loaded."""
+        """Run Claude Code headlessly (`claude -p`) with briefing + directive; resume prior session when set."""
         model = self.model_override or model_for(self.run.phase, self.run.goal)
         briefing = get_session_briefing(self.run)
         directive = phase_directive(self.run)
@@ -330,16 +350,78 @@ class AutopilotREPL:
         if os.getenv("AP_FORCE_API_KEY") != "1":
             env.pop("ANTHROPIC_API_KEY", None)
 
+        c = constraints()
+        max_turns = int(c.get("max_steps_per_run", 30))
+        perm = os.getenv("AP_CLAUDE_PERMISSION_MODE", "bypassPermissions")
+
+        cmd = [
+            "claude",
+            "-p",
+            initial_message,
+            "--output-format",
+            "json",
+            "--model",
+            model,
+            "--permission-mode",
+            perm,
+            "--max-turns",
+            str(max_turns),
+        ]
+        sid = (self.run.claude_session_id or "").strip()
+        if sid:
+            cmd.extend(["--resume", sid])
+
         console.print(
-            f"\n[dim]→ Launching Claude ({model}) | "
+            f"\n[dim]→ Claude headless ({model}) | "
             f"phase: {self.run.phase.value} | "
-            f"run: {self.run.run_id}[/dim]\n"
+            f"run: {self.run.run_id}"
+            + (" | resume" if sid else "")
+            + "[/dim]\n"
         )
 
         try:
-            subprocess.run(["claude", "--model", model, initial_message], env=env)
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=None,
+            )
         except FileNotFoundError:
             console.print("[red]Error: 'claude' CLI not found. Install Claude Code first.[/red]")
+            return
+
+        if proc.returncode != 0:
+            console.print(f"[red]claude exited {proc.returncode}[/red]")
+            if proc.stderr:
+                console.print(f"[dim]{proc.stderr.strip()[-4000:]}[/dim]")
+            if proc.stdout:
+                console.print(f"[dim]{proc.stdout.strip()[-2000:]}[/dim]")
+            return
+
+        data = _parse_claude_json_stdout(proc.stdout)
+        if not data:
+            console.print("[red]No JSON result from claude.[/red]")
+            if proc.stderr:
+                console.print(f"[dim]{proc.stderr.strip()[-2000:]}[/dim]")
+            return
+
+        if data.get("is_error") or data.get("subtype") == "error":
+            err = data.get("result") or data.get("error") or str(data)
+            console.print(f"[red]Claude error:[/red] {err}")
+            return
+
+        new_sid = str(data.get("session_id") or "").strip()
+        if new_sid:
+            self.run.claude_session_id = new_sid
+            save_run(self.run)
+
+        result_text = (data.get("result") or "").strip()
+        if result_text:
+            console.print(Panel(Markdown(result_text), title="Claude", border_style="green"))
+        else:
+            console.print("[dim](empty result)[/dim]")
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 

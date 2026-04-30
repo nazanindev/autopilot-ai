@@ -11,7 +11,7 @@ Autopilot tracks two distinct cost surfaces separately — mixing them up produc
 | Surface | Auth | Billing | What ap tracks |
 |---|---|---|---|
 | **Claude Code sessions** | `claude login` (claude.ai Pro/Max) | Flat subscription — $0 per session | 5-hour quota window msgs + tokens |
-| **ap utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (clarify, ship, ci-review) |
+| **ap utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, ci-review) |
 
 **Why the split matters:** Claude Code interactive sessions (the big coding loop) run against your Pro/Max subscription. They cost you $0 marginal, but they burn through your 5-hour message window. The `ap` CLI itself makes a handful of direct SDK calls per PR — those are metered and cost real money (typically cents, Haiku-heavy).
 
@@ -35,7 +35,7 @@ Autopilot treats the model as an **untrusted subprocess**: every constraint is e
 ## How it works
 
 ```
-ap REPL → clarify → Claude Code session (hooks track quota + gate subagents) → ap ship → GH Actions review
+ap REPL → Claude Code session (hooks track quota + gate subagents) → ap ship → GH Actions review
 ```
 
 State lives in an explicit **RunState machine** backed by DuckDB, not Claude's chat history. Every session gets a structured briefing injected — not a transcript. This keeps context cheap, runs resumable, and cost attributable.
@@ -43,14 +43,14 @@ State lives in an explicit **RunState machine** backed by DuckDB, not Claude's c
 ### RunState lifecycle
 
 ```
-clarify → plan → execute → verify → ship
+plan → execute → verify → ship
 ```
 
 Each phase selects a different model tier and enforces different constraints. Phase transitions are explicit — either from a slash command or from autopilot routing based on task keywords.
 
 ### Hooks
 
-Three hooks run globally across **every Claude Code session** via `~/.claude/settings.json`:
+Three hooks run for `ap` sessions via `~/.claude/settings.json`:
 
 | Hook | File | Purpose |
 |---|---|---|
@@ -58,7 +58,7 @@ Three hooks run globally across **every Claude Code session** via `~/.claude/set
 | `PreToolUse` | `hooks/pretool.py` | Step counter, bash allowlist, Agent spawn gate, API spend gate, quota warnings |
 | `PreCompact` | `hooks/precompact.py` | Injects custom compaction prompt that preserves RunState artifacts |
 
-Because hooks are wired globally, Autopilot's quota tracking and constraints apply to Claude Code sessions in **any repo** on your machine — not just this one.
+Hooks only fire when you launch Claude Code through `ap` — regular `claude` sessions are unaffected.
 
 ---
 
@@ -68,7 +68,7 @@ Because hooks are wired globally, Autopilot's quota tracking and constraints app
 - Python 3.9+
 - [`gh`](https://cli.github.com) CLI (for `ap ship` and the GH Actions reviewer)
 - A GitHub repo with a remote set as `origin`
-- An Anthropic API key (for ap utility calls only — `ap ship`, `ap ci-review`, clarify questions)
+- An Anthropic API key (for ap utility calls only — `ap ship`, `ap ci-review`)
 
 ---
 
@@ -106,18 +106,15 @@ echo 'export PATH="$HOME/Library/Python/3.9/bin:$PATH"' >> ~/.zshrc && source ~/
 ap
 ```
 
-Type a task in natural language. Autopilot asks clarifying questions, routes to the right model, launches Claude Code, and tracks quota + API spend.
+Type a task in natural language. Autopilot runs a short **structured intake** in the REPL (optional fields), then runs **Claude Code headlessly** (`claude -p` with JSON output): each turn is one bounded agentic pass, the reply is printed in the terminal, and the same Claude session is **resumed** on the next message until you `/done`. Hooks (`PreToolUse`, `Stop`, …) only run when `ap` sets `AP_ACTIVE=1` on that subprocess, so a normal interactive `claude` session elsewhere is unaffected. Subscription quota + API utility spend are still tracked.
 
 ```
-ap [plan:sonnet|step:0/20|wt:0.0|api:$0.00|quota:3/45] > add JWT authentication to the API
+ap [plan:sonnet|step:0/30|wt:0.0|api:$0.00|quota:3/45] > add JWT authentication to the API
 
-Before starting, a few questions:
-1. JWT or session-based?
-2. Social login needed?
+Quick intake — press Enter to skip any field.
+  Acceptance criteria: …
 
-Your answers: JWT only, no social
-
-→ Phase: plan | Model: claude-opus-4-5 | run: a3f2b1c4
+→ Claude headless (claude-opus-4-5) | phase: plan | run: a3f2b1c4
 ```
 
 ### Slash commands
