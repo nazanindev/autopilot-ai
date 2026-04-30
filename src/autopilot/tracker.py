@@ -51,6 +51,8 @@ class RunState:
     subscription_msgs: int = 0
     subscription_tokens_in: int = 0
     subscription_tokens_out: int = 0
+    # Claude Code headless session (for --resume across ap turns)
+    claude_session_id: str = ""
 
 
 def _conn() -> duckdb.DuckDBPyConnection:
@@ -92,7 +94,8 @@ def init_db() -> None:
                 pr_url VARCHAR,
                 subscription_msgs INTEGER,
                 subscription_tokens_in INTEGER,
-                subscription_tokens_out INTEGER
+                subscription_tokens_out INTEGER,
+                claude_session_id VARCHAR DEFAULT ''
             )
         """)
         for migration in [
@@ -102,6 +105,7 @@ def init_db() -> None:
             "ALTER TABLE runs ADD COLUMN IF NOT EXISTS subscription_msgs INTEGER DEFAULT 0",
             "ALTER TABLE runs ADD COLUMN IF NOT EXISTS subscription_tokens_in INTEGER DEFAULT 0",
             "ALTER TABLE runs ADD COLUMN IF NOT EXISTS subscription_tokens_out INTEGER DEFAULT 0",
+            "ALTER TABLE runs ADD COLUMN IF NOT EXISTS claude_session_id VARCHAR DEFAULT ''",
         ]:
             try:
                 con.execute(migration)
@@ -177,8 +181,9 @@ def save_run(run: RunState) -> None:
                 status, context_summary, cost_usd,
                 model, created_at, updated_at,
                 step_budget_used, pr_url,
-                subscription_msgs, subscription_tokens_in, subscription_tokens_out
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                subscription_msgs, subscription_tokens_in, subscription_tokens_out,
+                claude_session_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, [
             run.run_id, run.project, run.branch, run.goal,
             run.phase.value, run.current_step, run.max_steps,
@@ -189,6 +194,7 @@ def save_run(run: RunState) -> None:
             run.step_budget_used, run.pr_url,
             run.subscription_msgs, run.subscription_tokens_in,
             run.subscription_tokens_out,
+            run.claude_session_id or "",
         ])
 
 
@@ -209,6 +215,7 @@ def load_run(run_id: str) -> Optional[RunState]:
         "artifacts", "decisions", "plan_steps", "status", "context_summary", "cost_usd",
         "model", "created_at", "updated_at", "step_budget_used", "pr_url",
         "subscription_msgs", "subscription_tokens_in", "subscription_tokens_out",
+        "claude_session_id",
     ]
     with _conn() as con:
         row = con.execute(
@@ -227,6 +234,7 @@ def load_run(run_id: str) -> Optional[RunState]:
     d["subscription_msgs"] = int(d["subscription_msgs"] or 0)
     d["subscription_tokens_in"] = int(d["subscription_tokens_in"] or 0)
     d["subscription_tokens_out"] = int(d["subscription_tokens_out"] or 0)
+    d["claude_session_id"] = str(d.get("claude_session_id") or "")
     return RunState(**{k: v for k, v in d.items() if k in RunState.__dataclass_fields__})
 
 
