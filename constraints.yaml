@@ -29,9 +29,14 @@ phase_step_budgets:
 plan_steps_multiplier: 3.0
 
 # Plan progression control:
-# false (default): require explicit /approve before moving plan -> execute
-# true: auto-advance to execute as soon as a valid plan is captured
-plan_auto_advance: false
+# plan_approval_gate true: require /approve before execute phase
+# plan_approval_gate false: auto-advance from plan to execute
+plan_approval_gate: true
+
+# PR shipping control:
+# pr_approval_gate true: require confirmation before /ship triggers commit + PR
+# pr_approval_gate false: /ship proceeds immediately
+pr_approval_gate: true
 
 # ── API spend gate (flow utility calls: clarify, ship, ci-review) ─────────────
 # These hit ANTHROPIC_API_KEY and cost real money. Block Agent spawns if

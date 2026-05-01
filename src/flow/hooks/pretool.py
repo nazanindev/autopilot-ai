@@ -79,7 +79,8 @@ def main() -> None:
             if steps:
                 from flow.run_manager import set_plan_steps, advance_phase
                 set_plan_steps(run, steps)
-                if bool(c.get("plan_auto_advance", False)):
+                plan_gate_enabled = bool(c.get("plan_approval_gate", True))
+                if not plan_gate_enabled:
                     advance_phase(run, Phase.execute)
                 else:
                     print(
