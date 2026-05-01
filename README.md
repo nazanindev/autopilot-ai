@@ -1,7 +1,5 @@
 # AI Flow (`flow`)
 
-**🚧 Status: Prototype** — workflow is implemented; iterating on end-to-end stability and integration.
-
 A CLI harness for cost-aware AI-assisted development: prompt → patch → PR → review → merge. Optimized for minimal context, controlled token usage, and human-in-the-loop iteration.
 
 ---
@@ -36,17 +34,16 @@ Each phase selects a different model tier and enforces different constraints. Ph
 
 ### Hooks
 
-Three hooks run for `flow` sessions via `~/.claude/settings.json`:
+Three Claude Code hooks run for `flow` sessions via `~/.claude/settings.json`, plus one git hook installed per-repo:
 
 | Hook | File | Purpose |
 |---|---|---|
 | `Stop` | `hooks/stop.py` | Captures token usage → subscription quota window (DuckDB + Langfuse) on session end |
 | `PreToolUse` | `hooks/pretool.py` | Step counter, bash allowlist, Agent spawn gate, API spend gate, quota warnings |
 | `PreCompact` | `hooks/precompact.py` | Injects custom compaction prompt that preserves RunState artifacts |
+| `post-merge` (git) | `hooks/postmerge.py` | Checks the active run's PR via `gh`; auto-closes the run when the PR is merged |
 
 Hooks only fire when you launch Claude Code through `flow` — regular `claude` sessions are unaffected.
-
-`flow init` also installs a local git `post-merge` hook (`.git/hooks/post-merge`) that checks the active run's PR via `gh` and auto-closes the run when that PR is merged.
 
 ---
 
@@ -123,7 +120,7 @@ flow [plan:sonnet|step:0/30|wt:0.0|api:$0.00|quota:3/45] > add JWT authenticatio
 Quick intake — press Enter to skip any field.
   Acceptance criteria: …
 
-→ Claude headless (claude-opus-4-5) | phase: plan | run: a3f2b1c4
+→ Claude headless (claude-opus-4-7) | phase: plan | run: a3f2b1c4
 ```
 
 ### Slash commands
@@ -185,9 +182,9 @@ AI Flow automatically selects a model based on the current phase. You can overri
 
 | Phase | Model | When |
 |---|---|---|
-| Plan | `claude-opus-4-5` | Architecture, design, first session on a task |
+| Plan | `claude-opus-4-7` | Architecture, design, first session on a task |
 | Execute | `claude-sonnet-4-6` | Implementation once a plan exists |
-| Fast / CI | `claude-haiku-4-5` | Quick questions, lightweight tasks |
+| Fast / CI | `claude-haiku-4-5-20251001` | Quick questions, lightweight tasks |
 
 ### Keyword overrides
 
@@ -206,26 +203,50 @@ Task descriptions are scanned for keywords before phase routing kicks in:
 Configured in `constraints.yaml` and enforced via the `PreToolUse` hook — not prompted, not hoped for:
 
 ```yaml
-max_steps_per_run: 20        # blocks further tool calls once exceeded
+max_steps_per_run: 30        # fallback step ceiling
 max_tokens_per_step: 8000    # per-step token ceiling
 
-# Claude Code subscription quota (warns, doesn't hard-block — Anthropic enforces the real cap)
-subscription_quota_warn_pct: 0.80   # warn at 80% of 5-hour window
+# Weighted step budgets — each tool call deducts its weight from the budget
+tool_weights:
+  Write: 2.0
+  Edit: 1.5
+  Bash: 1.0
+  Agent: 5.0
+  Read: 0.25
+  Glob: 0.1
+  Grep: 0.1
+
+# Per-phase budgets (weighted units); overrides max_steps_per_run
+phase_step_budgets:
+  plan: 20.0
+  execute: 60.0
+  verify: 20.0
+  ship: 10.0
+
+# When plan steps are parsed, max_steps = len(steps) * multiplier
+plan_steps_multiplier: 3.0
+
+# Approval gates
+plan_approval_gate: true     # require /approve before execute
+pr_approval_gate: true       # require confirmation before /ship
+
+# flow utility API spend gate (ship, ci-review hit ANTHROPIC_API_KEY)
+api_spend_gate_usd: 1.00     # blocks Agent spawns if today's spend >= this
+
+# Subscription quota warning (Claude Code sessions — warns, never hard-blocks)
+subscription_quota_warn_pct: 0.80
 plan_window_caps:
-  pro:   { msgs: 45 }    # ~45 msgs per 5h window on Pro
-  max5:  { msgs: 225 }   # Max 5x
-  max20: { msgs: 900 }   # Max 20x
+  pro:      { msgs: 45 }
+  max5:     { msgs: 225 }
+  max20:    { msgs: 900 }
 
-# flow utility API spend (hard gate — blocks Agent spawns)
-api_spend_gate_usd: 1.00    # blocks Agent spawns if flow utility $ today >= this
-
-allowed_bash_commands:       # allowlist — unlisted commands are blocked
-  - git, pytest, python, uv, pip, npm, npx, gh, cat, ls, find, grep ...
+allowed_bash_commands:       # unlisted commands are blocked
+  - git, pytest, python, uv, pip, npm, npx, gh, cat, ls, find, grep, curl, jq ...
 
 agent_spawns_allowed_in:     # subagents only during planning phase
   - plan
 
-allowed_write_paths:         # write operations restricted to project root
+allowed_write_paths:
   - "./"
 ```
 
