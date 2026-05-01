@@ -74,10 +74,10 @@ def run_checks(cwd: Path = None) -> Tuple[bool, str]:
 
 def cmd_verify() -> None:
     """Run verification checks and print the result."""
-    from autopilot.tracker import init_db, load_active_run
-    from autopilot.config import get_project_id
-    from autopilot.run_manager import advance_phase
-    from autopilot.tracker import Phase
+    from flow.tracker import init_db, load_active_run
+    from flow.config import get_project_id
+    from flow.run_manager import advance_phase
+    from flow.tracker import Phase
 
     init_db()
     project = get_project_id()

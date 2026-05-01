@@ -1,5 +1,5 @@
 """
-Claude Code Stop hook — invoked as: python3 -m autopilot.hooks.stop
+Claude Code Stop hook — invoked as: python3 -m flow.hooks.stop
 Reads session data from hook payload, writes to DuckDB + Langfuse.
 
 Two billing surfaces:
@@ -18,13 +18,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path.home() / ".autopilot" / ".env")
 
-from autopilot.billing import calc_cost
-from autopilot.config import get_project_id, get_branch, get_plan
-from autopilot.tracker import (
+from flow.billing import calc_cost
+from flow.config import get_project_id, get_branch, get_plan
+from flow.tracker import (
     init_db, save_session, load_active_run, save_run,
     record_subscription_window,
 )
-from autopilot.observe import trace_session
+from flow.observe import trace_session
 
 
 def main() -> None:
