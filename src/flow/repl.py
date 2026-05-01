@@ -24,7 +24,7 @@ from flow.config import constraints, get_project_id, get_branch, get_plan, get_p
 from flow.router import MODEL_ALIASES, model_for
 from flow.tracker import (
     Phase, RunStatus, init_db, load_active_run, save_run,
-    get_api_spend_today, get_window_usage,
+    get_api_spend_today, get_window_usage, get_incomplete_runs, cleanup_incomplete_runs,
 )
 
 
@@ -145,6 +145,10 @@ class AutopilotREPL:
             self._compact()
         elif verb == "/resume":
             self._resume(arg)
+        elif verb == "/runs":
+            self._list_runs()
+        elif verb == "/cleanup":
+            self._cleanup_runs(arg)
         elif verb == "/skip-plan":
             if self.run:
                 advance_phase(self.run, Phase.execute)
@@ -364,6 +368,43 @@ class AutopilotREPL:
         self.run = r
         console.print(f"[green]✓ Resumed run {run_id}: {r.goal}[/green]")
 
+    def _list_runs(self) -> None:
+        """Show incomplete runs for quick pick/switch."""
+        runs = get_incomplete_runs(self.project, limit=20)
+        if not runs:
+            console.print("[yellow]No incomplete runs found.[/yellow]")
+            return
+        console.print("\n[bold]Incomplete runs:[/bold]")
+        for i, r in enumerate(runs, 1):
+            marker = "→" if self.run and self.run.run_id == r["run_id"] else " "
+            console.print(
+                f" {marker} [cyan]{i}.[/cyan] [{r['run_id']}] {r['goal'][:60]} "
+                f"[dim]{r['phase']} · {r['status']} · ${r['cost_usd']:.4f}[/dim]"
+            )
+        console.print("[dim]Tip: /resume <run_id> to switch[/dim]")
+
+    def _cleanup_runs(self, arg: str) -> None:
+        """Quickly complete stale runs to reduce picker clutter."""
+        include_current = arg.strip().lower() in ("all", "--all")
+        if include_current:
+            prompt = "Complete ALL incomplete runs (including current)? [y/N]: "
+        else:
+            prompt = "Complete stale runs except current active run? [y/N]: "
+        try:
+            ans = self.session.prompt(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[yellow]Cleanup cancelled.[/yellow]")
+            return
+        if ans not in ("y", "yes"):
+            console.print("[yellow]Cleanup cancelled.[/yellow]")
+            return
+
+        keep = "" if include_current else (self.run.run_id if self.run else "")
+        n = cleanup_incomplete_runs(self.project, keep_run_id=keep, include_keep=include_current)
+        if include_current and self.run:
+            self.run = None
+        console.print(f"[green]✓ Cleaned up {n} run(s)[/green]")
+
     def _run_verify(self) -> None:
         from flow.commands.verify import run_checks
         passed, output = run_checks()
@@ -418,6 +459,8 @@ class AutopilotREPL:
             "  /skip-plan     → skip planning, go straight to execute\n\n"
             "[bold]Run lifecycle:[/bold]\n"
             "  /resume [id]   → resume an interrupted run (picker if no ID)\n"
+            "  /runs          → list incomplete runs\n"
+            "  /cleanup [all] → complete stale runs quickly (all includes current)\n"
             "  /approve       → approve captured plan and start execute now\n"
             "  /reject        → reject captured plan and request a revised one\n"
             "  /step-done [id]→ mark a plan step done (default: next pending)\n"
