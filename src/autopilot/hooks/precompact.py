@@ -4,6 +4,7 @@ Provides a custom compaction prompt that preserves RunState artifacts
 and drops conversation noise.
 """
 import json
+import os
 import sys
 from pathlib import Path
 

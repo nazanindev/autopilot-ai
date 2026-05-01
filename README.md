@@ -50,16 +50,16 @@ Hooks only fire when you launch Claude Code through `flow` — regular `claude` 
 
 ## Two billing surfaces
 
-Autopilot tracks two distinct cost surfaces separately — mixing them up produces meaningless numbers:
+AI Flow tracks two distinct cost surfaces separately — mixing them up produces meaningless numbers:
 
-| Surface | Auth | Billing | What ap tracks |
+| Surface | Auth | Billing | What flow tracks |
 |---|---|---|---|
 | **Claude Code sessions** | `claude login` (claude.ai Pro/Max) | Flat subscription — $0 per session | 5-hour quota window msgs + tokens |
-| **ap utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, ci-review) |
+| **flow utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, ci-review) |
 
-**Why the split matters:** Claude Code interactive sessions (the big coding loop) run against your Pro/Max subscription. They cost you $0 marginal, but they burn through your 5-hour message window. The `ap` CLI itself makes a handful of direct SDK calls per PR — those are metered and cost real money (typically cents, Haiku-heavy).
+**Why the split matters:** Claude Code interactive sessions (the big coding loop) run against your Pro/Max subscription. They cost you $0 marginal, but they burn through your 5-hour message window. The `flow` CLI itself makes a handful of direct SDK calls per PR — those are metered and cost real money (typically cents, Haiku-heavy).
 
-**Trust boundary:** If you flip to API mode (`AP_FORCE_API_KEY=1`), set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) — autopilot's gates don't protect against runaway in-session spend. The guards here only gate the ap utility calls.
+**Trust boundary:** If you flip to API mode (`AP_FORCE_API_KEY=1`), set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) — flow's gates don't protect against runaway in-session spend. The guards here only gate the flow utility calls.
 
 ---
 

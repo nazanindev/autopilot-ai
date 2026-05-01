@@ -52,8 +52,11 @@ def get_project_id() -> str:
             stderr=subprocess.DEVNULL,
             text=True,
         ).strip()
-        # github.com/user/repo-name → repo-name
-        return url.rstrip("/").rstrip(".git").split("/")[-1]
+        # github.com/user/repo-name(.git) -> repo-name
+        normalized = url.rstrip("/")
+        if normalized.endswith(".git"):
+            normalized = normalized[:-4]
+        return normalized.split("/")[-1]
     except Exception:
         return Path.cwd().name
 
