@@ -5,6 +5,7 @@ Manages run lifecycle, phase switching, and Claude Code headless launch (`claude
 import json
 import os
 import queue
+import shlex
 import subprocess
 import sys
 import threading
@@ -169,6 +170,43 @@ class AutopilotREPL:
             console.print(f"[red]Unknown command: {verb}[/red]")
         return True
 
+    def _run_nested_flow_cli(self, argv: list[str]) -> None:
+        """Run a `flow` subcommand in-process (same as the shell CLI)."""
+        from flow.cli import app
+
+        try:
+            app(argv, standalone_mode=True)
+        except SystemExit as e:
+            code = e.code
+            if code not in (0, None):
+                console.print(f"[red]Command exited with code {code}[/red]")
+
+    def _try_dispatch_shell_style_flow(self, user_input: str) -> bool:
+        """If input looks like `flow <subcommand>`, run CLI instead of sending to Claude."""
+        stripped = user_input.strip()
+        if stripped == "flow":
+            console.print(
+                "[yellow]Bare `flow` starts another REPL — blocked here to avoid nesting.[/yellow]\n"
+                "[dim]Use `flow status`, `flow features list`, etc., or slash commands like /status.[/dim]"
+            )
+            return True
+        if not stripped.startswith("flow "):
+            return False
+        rest = stripped[5:].strip()
+        if not rest:
+            console.print(
+                "[yellow]Missing subcommand after `flow`.[/yellow]\n"
+                "[dim]Examples: `flow status`, `flow verify`, `flow features list`[/dim]"
+            )
+            return True
+        try:
+            argv = shlex.split(rest)
+        except ValueError as e:
+            console.print(f"[red]Could not parse command: {e}[/red]")
+            return True
+        self._run_nested_flow_cli(argv)
+        return True
+
     def _set_phase(self, phase: Phase) -> None:
         if not self.run:
             console.print("[yellow]No active run. Start a task first.[/yellow]")
@@ -270,6 +308,11 @@ class AutopilotREPL:
 
     def _show_help(self) -> None:
         console.print(Panel(
+            "[bold]Shell-style CLI (inside this REPL):[/bold]\n"
+            "  `flow status` · `flow verify` · `flow features list` — same as in a terminal.\n"
+            "  [dim]Bare `flow` is blocked here (would nest another REPL).[/dim]\n\n"
+            "[bold]Slash shortcuts:[/bold]\n"
+            "  /status · /verify · /ship — same as `flow status`, etc.\n\n"
             "[bold]Phase toggles:[/bold]\n"
             "  /plan          → Opus (planning)\n"
             "  /exec          → Sonnet (execution)\n"
@@ -555,6 +598,15 @@ class AutopilotREPL:
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def start(self) -> None:
+        import warnings
+
+        warnings.filterwarnings(
+            "ignore",
+            message=".*urllib3 v2 only supports OpenSSL.*",
+            category=UserWarning,
+            module="urllib3",
+        )
+
         init_db()
 
         # Restore active run for this project
@@ -562,7 +614,8 @@ class AutopilotREPL:
 
         console.print(Panel(
             f"[bold cyan]AI Flow[/bold cyan] — {self.project} ({self.branch})\n"
-            f"[dim]Type a task to start, /help for commands, /quit to exit.[/dim]"
+            f"[dim]Type a task to start, /help for commands, /quit to exit.[/dim]\n"
+            f"[dim]Tip: `flow status` / `flow verify` work here; or use /status, /verify.[/dim]"
             + (f"\n\n[yellow]Active run: {self.run.run_id} — {self.run.goal[:60]}[/yellow]" if self.run else ""),
             border_style="cyan",
         ))
@@ -579,6 +632,9 @@ class AutopilotREPL:
 
             if user_input.startswith("/"):
                 self.handle_slash(user_input)
+                continue
+
+            if self._try_dispatch_shell_style_flow(user_input):
                 continue
 
             # New task or continuation
