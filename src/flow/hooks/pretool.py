@@ -83,7 +83,15 @@ def main() -> None:
             if steps:
                 from flow.run_manager import set_plan_steps, advance_phase
                 set_plan_steps(run, steps)
-                advance_phase(run, Phase.execute)
+                gate_env = os.getenv("AP_PLAN_GATE", "").strip().lower()
+                if gate_env in {"0", "off", "false"}:
+                    plan_gate_enabled = False
+                elif gate_env in {"1", "on", "true"}:
+                    plan_gate_enabled = True
+                else:
+                    plan_gate_enabled = bool(c.get("plan_approval_gate", True))
+                if not plan_gate_enabled:
+                    advance_phase(run, Phase.execute)
         allow()
 
     # ── Agent spawn gate ─────────────────────────────────────────────────────

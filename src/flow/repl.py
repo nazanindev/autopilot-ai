@@ -298,11 +298,12 @@ class AutopilotREPL:
                 "Ask for a numbered plan first.[/yellow]"
             )
             return
+        if self.run.phase == Phase.execute:
+            console.print("[green]✓ Plan already in execute — continuing now[/green]")
+            self._run_turn("Continue executing the first pending plan step now.")
+            return
         if self.run.phase != Phase.plan:
-            console.print(
-                f"[yellow]Run is in {self.run.phase.value}, not plan. "
-                "Use /plan first if you need to re-approve.[/yellow]"
-            )
+            console.print(f"[yellow]Run is in {self.run.phase.value}, not plan.[/yellow]")
             return
         advance_phase(self.run, Phase.execute)
         self.run.phase = Phase.execute
@@ -515,6 +516,17 @@ class AutopilotREPL:
             self._print_plan()
             self._maybe_prompt_plan_approval()
 
+        # If we just transitioned plan -> execute without a gate, immediately run
+        # the first execution turn so the user doesn't need an extra prompt.
+        if (
+            prev_phase == Phase.plan
+            and self.run.phase == Phase.execute
+            and self.run.plan_steps
+            and not self.plan_gate_enabled
+        ):
+            console.print("[dim]→ Plan accepted; starting execution turn automatically...[/dim]")
+            self._run_turn("Begin executing the first pending plan step now.")
+
     # ── Task launch ───────────────────────────────────────────────────────────
 
     def _structured_intake(self, goal: str) -> tuple[str, str]:
@@ -582,6 +594,7 @@ class AutopilotREPL:
 
         env = os.environ.copy()
         env["AP_ACTIVE"] = "1"
+        env["AP_PLAN_GATE"] = "1" if self.plan_gate_enabled else "0"
         if self.no_agents:
             env["AP_NO_SPAWN"] = "1"
 
