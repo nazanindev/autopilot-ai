@@ -43,7 +43,8 @@ Output ONLY the markdown."""
 
 
 def _client() -> anthropic.Anthropic:
-    return anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+    key = os.getenv("ANTHROPIC_API_KEY") or ("mock-key" if os.getenv("AP_MOCK_API") == "1" else "")
+    return anthropic.Anthropic(api_key=key)
 
 
 def _get_diff(pr_number: Optional[int], diff_path: Optional[str]) -> str:
