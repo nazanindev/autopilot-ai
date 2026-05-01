@@ -17,7 +17,7 @@ def model_for(phase: Phase, goal: str = "") -> str:
 
 
 MODEL_ALIASES = {
-    "opus":   "claude-opus-4-5",
+    "opus":   "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
     "haiku":  "claude-haiku-4-5-20251001",
 }

@@ -40,7 +40,7 @@ class RunState:
     plan_steps: list = field(default_factory=list)
     status: RunStatus = RunStatus.active
     context_summary: str = ""
-    # Real API spend only (ap utility calls: clarify, ship, ci-review)
+    # Real API spend only (flow utility calls: clarify, ship, ci-review)
     cost_usd: float = 0.0
     model: str = "claude-sonnet-4-6"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -51,7 +51,7 @@ class RunState:
     subscription_msgs: int = 0
     subscription_tokens_in: int = 0
     subscription_tokens_out: int = 0
-    # Claude Code headless session (for --resume across ap turns)
+    # Claude Code headless session (for --resume across flow turns)
     claude_session_id: str = ""
 
 
@@ -325,7 +325,7 @@ def save_subagent_event(
 
 
 def get_api_spend_today(project: Optional[str] = None) -> float:
-    """Real $ spent today via ANTHROPIC_API_KEY (ap utility calls only)."""
+    """Real $ spent today via ANTHROPIC_API_KEY (flow utility calls only)."""
     with _conn() as con:
         if project:
             row = con.execute("""

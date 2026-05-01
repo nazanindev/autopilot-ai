@@ -4,7 +4,7 @@ import os
 
 from autopilot.tracker import RunState, Phase, RunStatus, save_run, load_run, load_active_run
 from autopilot.context import build_briefing, summarize_for_new_session
-from autopilot.observe import trace_run_event
+from autopilot.observe import trace_run_event, trace_run_started
 from autopilot.config import get_project_id, get_branch, constraints
 
 
@@ -19,7 +19,7 @@ def create_run(goal: str) -> RunState:
         branch=get_branch(),
     )
     save_run(run)
-    trace_run_event(run.run_id, run.project, "run_created", {"goal": goal})
+    trace_run_started(run.run_id, run.project, run.branch, goal)
     return run
 
 

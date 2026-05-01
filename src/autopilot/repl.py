@@ -1,11 +1,14 @@
 """
-Autopilot REPL — persistent interactive session.
+AI Flow REPL — persistent interactive session.
 Manages run lifecycle, phase switching, and Claude Code headless launch (`claude -p`).
 """
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -92,7 +95,7 @@ class AutopilotREPL:
         if flags:
             parts.append(",".join(flags))
         inner = " | ".join(parts)
-        return f"ap [{inner}] > "
+        return f"flow [{inner}] > "
 
     # ── Slash commands ────────────────────────────────────────────────────────
 
@@ -268,8 +271,8 @@ class AutopilotREPL:
             "  /ship          → verify → commit → create PR\n"
             "  /done          → mark current run complete\n"
             "  /status        → show current run + cost\n"
-            "  /quit          → exit autopilot",
-            title="Autopilot commands",
+            "  /quit          → exit AI Flow",
+            title="AI Flow commands",
             border_style="dim",
         ))
 
@@ -344,7 +347,7 @@ class AutopilotREPL:
             env["AP_NO_SPAWN"] = "1"
 
         # Avoid the auth conflict between a logged-in claude.ai session and
-        # ANTHROPIC_API_KEY. Autopilot's own SDK calls still use the key from
+        # ANTHROPIC_API_KEY. AI Flow's own SDK calls still use the key from
         # the parent process; we only strip it from the subprocess.
         # Set AP_FORCE_API_KEY=1 if you actually want the CLI to bill via API.
         if os.getenv("AP_FORCE_API_KEY") != "1":
@@ -353,13 +356,16 @@ class AutopilotREPL:
         c = constraints()
         max_turns = int(c.get("max_steps_per_run", 30))
         perm = os.getenv("AP_CLAUDE_PERMISSION_MODE", "bypassPermissions")
+        timeout_s = int(os.getenv("AP_CLAUDE_TIMEOUT_S", "180"))
 
+        stream_enabled = os.getenv("AP_CLAUDE_STREAM", "1") != "0"
+        output_format = "stream-json" if stream_enabled else "json"
         cmd = [
             "claude",
             "-p",
             initial_message,
             "--output-format",
-            "json",
+            output_format,
             "--model",
             model,
             "--permission-mode",
@@ -367,6 +373,8 @@ class AutopilotREPL:
             "--max-turns",
             str(max_turns),
         ]
+        if stream_enabled:
+            cmd.extend(["--verbose", "--include-partial-messages"])
         sid = (self.run.claude_session_id or "").strip()
         if sid:
             cmd.extend(["--resume", sid])
@@ -379,37 +387,139 @@ class AutopilotREPL:
             + "[/dim]\n"
         )
 
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        streamed_parts: list[str] = []
+        final_data: Optional[Dict[str, Any]] = None
+        printed_live = False
+
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 env=env,
                 stdin=subprocess.DEVNULL,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=None,
+                bufsize=1,
             )
         except FileNotFoundError:
             console.print("[red]Error: 'claude' CLI not found. Install Claude Code first.[/red]")
             return
 
-        if proc.returncode != 0:
-            console.print(f"[red]claude exited {proc.returncode}[/red]")
-            if proc.stderr:
-                console.print(f"[dim]{proc.stderr.strip()[-4000:]}[/dim]")
-            if proc.stdout:
-                console.print(f"[dim]{proc.stdout.strip()[-2000:]}[/dim]")
+        q: "queue.Queue[tuple[str, Optional[str]]]" = queue.Queue()
+
+        def _pump(stream_name: str, pipe) -> None:
+            try:
+                for line in iter(pipe.readline, ""):
+                    q.put((stream_name, line))
+            finally:
+                q.put((stream_name, None))
+
+        assert proc.stdout is not None and proc.stderr is not None
+        t_out = threading.Thread(target=_pump, args=("stdout", proc.stdout), daemon=True)
+        t_err = threading.Thread(target=_pump, args=("stderr", proc.stderr), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        done_streams = set()
+        start_ts = time.monotonic()
+        while True:
+            if len(done_streams) == 2 and proc.poll() is not None and q.empty():
+                break
+
+            if (time.monotonic() - start_ts) > timeout_s:
+                proc.kill()
+                console.print(
+                    f"[red]claude timed out after {timeout_s}s[/red] "
+                    "[dim](set AP_CLAUDE_TIMEOUT_S to adjust)[/dim]"
+                )
+                break
+
+            try:
+                stream_name, line = q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            if line is None:
+                done_streams.add(stream_name)
+                continue
+
+            if stream_name == "stderr":
+                stderr_lines.append(line)
+                msg = line.strip()
+                if msg:
+                    console.print(f"[dim]{msg}[/dim]")
+                continue
+
+            stdout_lines.append(line)
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if not stream_enabled:
+                continue
+            try:
+                evt = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+
+            if evt.get("type") == "result":
+                final_data = evt
+                continue
+
+            if evt.get("type") != "stream_event":
+                continue
+            event = evt.get("event", {})
+            if event.get("type") != "content_block_delta":
+                continue
+            delta = event.get("delta", {})
+            if delta.get("type") != "text_delta":
+                continue
+            text = str(delta.get("text", ""))
+            if not text:
+                continue
+            if not printed_live:
+                console.print("[bold green]Claude[/bold green]", end=": ")
+                printed_live = True
+            console.print(text, end="")
+            streamed_parts.append(text)
+
+        try:
+            return_code = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return_code = proc.wait(timeout=5)
+        if printed_live:
+            console.print("")
+
+        stdout_raw = "".join(stdout_lines)
+        stderr_raw = "".join(stderr_lines)
+
+        data = (
+            final_data
+            or _parse_claude_json_stdout(stdout_raw)
+            or _parse_claude_json_stdout(stderr_raw)
+        )
+        if return_code != 0 and not data:
+            console.print(f"[red]claude exited {return_code}[/red]")
+            if stderr_raw.strip():
+                console.print(f"[dim]{stderr_raw.strip()[-2000:]}[/dim]")
+            elif stdout_raw.strip():
+                console.print(f"[dim]{stdout_raw.strip()[-2000:]}[/dim]")
             return
 
-        data = _parse_claude_json_stdout(proc.stdout)
         if not data:
             console.print("[red]No JSON result from claude.[/red]")
-            if proc.stderr:
-                console.print(f"[dim]{proc.stderr.strip()[-2000:]}[/dim]")
+            if stderr_raw.strip():
+                console.print(f"[dim]{stderr_raw.strip()[-2000:]}[/dim]")
             return
 
         if data.get("is_error") or data.get("subtype") == "error":
             err = data.get("result") or data.get("error") or str(data)
-            console.print(f"[red]Claude error:[/red] {err}")
+            if str(data.get("api_error_status")) == "429" or "limit" in str(err).lower():
+                console.print(f"[yellow]Claude quota reached:[/yellow] {err}")
+            else:
+                console.print(f"[red]Claude error:[/red] {err}")
             return
 
         new_sid = str(data.get("session_id") or "").strip()
@@ -418,8 +528,10 @@ class AutopilotREPL:
             save_run(self.run)
 
         result_text = (data.get("result") or "").strip()
+        streamed_text = "".join(streamed_parts).strip()
         if result_text:
-            console.print(Panel(Markdown(result_text), title="Claude", border_style="green"))
+            if not streamed_text:
+                console.print(Panel(Markdown(result_text), title="Claude", border_style="green"))
         else:
             console.print("[dim](empty result)[/dim]")
 
@@ -432,7 +544,7 @@ class AutopilotREPL:
         self.run = load_active_run(self.project)
 
         console.print(Panel(
-            f"[bold cyan]Autopilot[/bold cyan] — {self.project} ({self.branch})\n"
+            f"[bold cyan]AI Flow[/bold cyan] — {self.project} ({self.branch})\n"
             f"[dim]Type a task to start, /help for commands, /quit to exit.[/dim]"
             + (f"\n\n[yellow]Active run: {self.run.run_id} — {self.run.goal[:60]}[/yellow]" if self.run else ""),
             border_style="cyan",

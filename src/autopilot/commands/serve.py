@@ -1,4 +1,4 @@
-"""ap serve — local FastAPI dashboard on :7331."""
+"""flow serve — local FastAPI dashboard on :7331."""
 import os
 
 from rich.console import Console
@@ -10,7 +10,7 @@ _HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Autopilot</title>
+<title>AI Flow</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace; background: #0d1117; color: #e6edf3; padding: 2rem; }
@@ -41,7 +41,7 @@ _HTML = """<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>⚡ Autopilot <button id="refresh" onclick="load()">↻ refresh</button></h1>
+<h1>⚡ AI Flow <button id="refresh" onclick="load()">↻ refresh</button></h1>
 <div id="app"><p style="color:#8b949e">Loading...</p></div>
 <script>
 async function load() {
@@ -168,7 +168,7 @@ def cmd_serve(port: int = 7331) -> None:
     from autopilot.config import get_project_id, constraints, get_plan, get_plan_window_caps
 
     init_db()
-    app = FastAPI(title="Autopilot", docs_url=None, redoc_url=None)
+    app = FastAPI(title="AI Flow", docs_url=None, redoc_url=None)
 
     @app.get("/", response_class=HTMLResponse)
     async def dashboard():
@@ -231,5 +231,5 @@ def cmd_serve(port: int = 7331) -> None:
     async def runs(limit: int = 20, project: str = None):
         return JSONResponse(get_recent_runs(project, limit=limit))
 
-    console.print(f"[bold cyan]Autopilot dashboard[/bold cyan] → http://localhost:{port}")
+    console.print(f"[bold cyan]AI Flow dashboard[/bold cyan] → http://localhost:{port}")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")

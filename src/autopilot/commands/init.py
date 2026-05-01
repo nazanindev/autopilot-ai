@@ -1,4 +1,4 @@
-"""ap init — wire Autopilot hooks into ~/.claude/settings.json."""
+"""flow init — wire AI Flow hooks into ~/.claude/settings.json."""
 import json
 import shutil
 from pathlib import Path
@@ -13,7 +13,7 @@ AP_STYLE_PATH = Path.home() / ".autopilot" / "style.yaml"
 AP_ENV_EXAMPLE = Path(__file__).parent.parent.parent.parent / ".env.example"
 
 DEFAULT_STYLE = """\
-# Autopilot style — controls AI voice across all outputs.
+# AI Flow style — controls AI voice across all outputs.
 # Set any section to null (or delete it) to skip that style injection entirely.
 
 agent:
@@ -93,7 +93,7 @@ def cmd_init(force: bool = False) -> None:
     if existing_hooks and not force:
         console.print(
             "[yellow]Hooks already configured in ~/.claude/settings.json.[/yellow]\n"
-            "Run [bold]ap init --force[/bold] to overwrite."
+            "Run [bold]flow init --force[/bold] to overwrite."
         )
         _show_status(settings)
         return

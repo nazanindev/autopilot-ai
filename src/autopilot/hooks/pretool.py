@@ -106,7 +106,7 @@ def main() -> None:
 
         if api_spend_today >= api_spend_gate:
             reason = (
-                f"API spend gate: today's ap utility spend ${api_spend_today:.2f} >= "
+                f"API spend gate: today's flow utility spend ${api_spend_today:.2f} >= "
                 f"${api_spend_gate:.2f} limit. Subagent spawn blocked."
             )
             save_subagent_event(session_id, run_id, project, phase, "", False, reason)
@@ -164,7 +164,7 @@ def _maybe_warn_quota(c: dict) -> None:
     used_pct = window["msgs_used"] / msg_cap
     if used_pct >= warn_pct:
         print(
-            f"[ap warn] Subscription quota: {window['msgs_used']}/{msg_cap} msgs used "
+            f"[flow warn] Subscription quota: {window['msgs_used']}/{msg_cap} msgs used "
             f"({used_pct*100:.0f}%) in current 5-hour window.",
             file=sys.stderr,
         )

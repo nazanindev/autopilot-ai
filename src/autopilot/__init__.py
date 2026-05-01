@@ -1,1 +1,1 @@
-"""Autopilot — personal AI dev harness."""
+"""AI Flow — personal AI dev harness."""

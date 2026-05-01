@@ -6,7 +6,7 @@ on:
 
 jobs:
   review:
-    name: Autopilot review
+    name: AI Flow review
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
@@ -21,13 +21,13 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install Autopilot
+      - name: Install AI Flow
         run: pip install -e .
 
       - name: Run AI review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: ap ci-review --pr ${{ github.event.pull_request.number }}
+        run: flow ci-review --pr ${{ github.event.pull_request.number }}
         # Exits non-zero if blockers found — set continue-on-error: true to make it advisory only
         continue-on-error: true
