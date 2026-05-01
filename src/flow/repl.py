@@ -132,6 +132,15 @@ class AutopilotREPL:
                 steps.append({"id": m.group(1), "description": m.group(2).strip(), "status": "pending"})
         return steps
 
+    def _extract_step_done_ids(self, text: str) -> list[str]:
+        """Extract explicit step completion markers from model output."""
+        ids: list[str] = []
+        for line in (text or "").splitlines():
+            m = re.match(r"^\s*STEP_DONE\s*:\s*(\d+)\s*$", line.strip(), flags=re.IGNORECASE)
+            if m:
+                ids.append(m.group(1))
+        return ids
+
     # ── Slash commands ────────────────────────────────────────────────────────
 
     def handle_slash(self, cmd: str) -> bool:
@@ -300,8 +309,10 @@ class AutopilotREPL:
             )
             return
         if self.run.phase == Phase.execute:
-            console.print("[green]✓ Plan already in execute — continuing now[/green]")
-            self._run_turn("Continue executing the first pending plan step now.")
+            console.print(
+                "[yellow]Already in execute. Use `/next` when a step is done "
+                "or send a follow-up task to continue.[/yellow]"
+            )
             return
         if self.run.phase != Phase.plan:
             console.print(f"[yellow]Run is in {self.run.phase.value}, not plan.[/yellow]")
@@ -502,6 +513,25 @@ class AutopilotREPL:
                     console.print(
                         "[green]✓ Parsed plan from response — auto-advanced to execute[/green]"
                     )
+
+        # Execute-phase completion signal from the model.
+        if self.run.phase == Phase.execute and self.run.plan_steps and response_text:
+            marked = 0
+            known_ids = {str(s.get("id")) for s in self.run.plan_steps}
+            for step_id in self._extract_step_done_ids(response_text):
+                if step_id in known_ids:
+                    complete_plan_step(self.run, step_id)
+                    for step in self.run.plan_steps:
+                        if str(step.get("id")) == step_id:
+                            step["status"] = "done"
+                            break
+                    marked += 1
+            if marked:
+                console.print(f"[green]✓ Auto-marked {marked} step(s) done from STEP_DONE markers[/green]")
+                if all(s.get("status") == "done" for s in self.run.plan_steps):
+                    advance_phase(self.run, Phase.verify)
+                    self.run.phase = Phase.verify
+                    console.print("[green]✓ All plan steps complete — phase auto-advanced to verify[/green]")
 
         api_today = get_api_spend_today(self.project)
         console.print(
