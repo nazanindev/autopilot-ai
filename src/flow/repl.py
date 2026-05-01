@@ -5,6 +5,7 @@ Manages run lifecycle, phase switching, and Claude Code headless launch (`claude
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -46,7 +47,8 @@ def _parse_claude_json_stdout(raw_out: str) -> Optional[Dict[str, Any]]:
     return None
 from flow.run_manager import (
     create_run, advance_phase, refresh_context_summary,
-    add_artifact, add_decision, complete_run, get_session_briefing
+    add_artifact, add_decision, complete_plan_step, complete_run, get_session_briefing,
+    set_plan_steps,
 )
 from flow.context import phase_directive
 
@@ -97,6 +99,15 @@ class AutopilotREPL:
         inner = " | ".join(parts)
         return f"flow [{inner}] > "
 
+    def _parse_numbered_plan_steps(self, text: str) -> list[dict]:
+        """Parse numbered plan lines from assistant output as a fallback."""
+        steps = []
+        for line in (text or "").splitlines():
+            m = re.match(r"^\s*(\d+)[.)]\s+(.+)", line)
+            if m:
+                steps.append({"id": m.group(1), "description": m.group(2).strip(), "status": "pending"})
+        return steps
+
     # ── Slash commands ────────────────────────────────────────────────────────
 
     def handle_slash(self, cmd: str) -> bool:
@@ -136,6 +147,8 @@ class AutopilotREPL:
                 advance_phase(self.run, Phase.execute)
                 self.run.phase = Phase.execute
                 console.print("[dim]→ Skipped planning phase → execute[/dim]")
+        elif verb in ("/step-done", "/next"):
+            self._step_done(arg)
         elif verb == "/status":
             self._show_status()
         elif verb == "/verify":
@@ -174,6 +187,40 @@ class AutopilotREPL:
 
     def _compact(self) -> None:
         self._new_session()
+
+    def _step_done(self, step_ref: str) -> None:
+        """Mark a plan step done and auto-advance to verify if complete."""
+        if not self.run:
+            console.print("[yellow]No active run.[/yellow]")
+            return
+        if not self.run.plan_steps:
+            console.print("[yellow]No plan steps recorded on this run.[/yellow]")
+            return
+
+        target_id = step_ref.strip()
+        if not target_id:
+            pending = [s for s in self.run.plan_steps if s.get("status") != "done"]
+            if not pending:
+                console.print("[green]All plan steps are already done.[/green]")
+                return
+            target_id = str(pending[0].get("id"))
+
+        ids = {str(s.get("id")) for s in self.run.plan_steps}
+        if target_id not in ids:
+            console.print(f"[red]Unknown step id: {target_id}[/red]")
+            return
+
+        complete_plan_step(self.run, target_id)
+        for step in self.run.plan_steps:
+            if str(step.get("id")) == target_id:
+                step["status"] = "done"
+                break
+        console.print(f"[green]✓ Step {target_id} marked done[/green]")
+
+        if all(s.get("status") == "done" for s in self.run.plan_steps):
+            advance_phase(self.run, Phase.verify)
+            self.run.phase = Phase.verify
+            console.print("[green]✓ All plan steps complete — phase auto-advanced to verify[/green]")
 
     def _resume(self, run_id: str) -> None:
         from flow.tracker import load_run, get_recent_runs, RunStatus
@@ -267,6 +314,8 @@ class AutopilotREPL:
             "  /skip-plan     → skip planning, go straight to execute\n\n"
             "[bold]Run lifecycle:[/bold]\n"
             "  /resume [id]   → resume an interrupted run (picker if no ID)\n"
+            "  /step-done [id]→ mark a plan step done (default: next pending)\n"
+            "  /next          → alias for /step-done\n"
             "  /verify        → run tests/lint for current project\n"
             "  /ship          → verify → commit → create PR\n"
             "  /done          → mark current run complete\n"
@@ -328,7 +377,7 @@ class AutopilotREPL:
             lines.append(f"  {marker} {s['description']}")
         console.print("\n" + "\n".join(lines))
 
-    def _launch_claude(self, task: str) -> None:
+    def _launch_claude(self, task: str) -> str:
         """Run Claude Code headlessly (`claude -p`) with briefing + directive; resume prior session when set."""
         model = self.model_override or model_for(self.run.phase, self.run.goal)
         briefing = get_session_briefing(self.run)
@@ -405,7 +454,7 @@ class AutopilotREPL:
             )
         except FileNotFoundError:
             console.print("[red]Error: 'claude' CLI not found. Install Claude Code first.[/red]")
-            return
+            return ""
 
         q: "queue.Queue[tuple[str, Optional[str]]]" = queue.Queue()
 
@@ -506,13 +555,13 @@ class AutopilotREPL:
                 console.print(f"[dim]{stderr_raw.strip()[-2000:]}[/dim]")
             elif stdout_raw.strip():
                 console.print(f"[dim]{stdout_raw.strip()[-2000:]}[/dim]")
-            return
+            return ""
 
         if not data:
             console.print("[red]No JSON result from claude.[/red]")
             if stderr_raw.strip():
                 console.print(f"[dim]{stderr_raw.strip()[-2000:]}[/dim]")
-            return
+            return ""
 
         if data.get("is_error") or data.get("subtype") == "error":
             err = data.get("result") or data.get("error") or str(data)
@@ -520,7 +569,7 @@ class AutopilotREPL:
                 console.print(f"[yellow]Claude quota reached:[/yellow] {err}")
             else:
                 console.print(f"[red]Claude error:[/red] {err}")
-            return
+            return ""
 
         new_sid = str(data.get("session_id") or "").strip()
         if new_sid:
@@ -534,6 +583,7 @@ class AutopilotREPL:
                 console.print(Panel(Markdown(result_text), title="Claude", border_style="green"))
         else:
             console.print("[dim](empty result)[/dim]")
+        return result_text or streamed_text
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -590,7 +640,7 @@ class AutopilotREPL:
             else:
                 launch_task = user_input
 
-            self._launch_claude(launch_task)
+            response_text = self._launch_claude(launch_task)
 
             # Reload run after session ends (hooks may have updated it)
             from flow.tracker import load_run
@@ -598,6 +648,22 @@ class AutopilotREPL:
             updated = load_run(self.run.run_id)
             if updated:
                 self.run = updated
+
+            # Fallback: if model produced a numbered plan but didn't call ExitPlanMode,
+            # capture steps and advance to execute automatically.
+            if (
+                self.run.phase == Phase.plan
+                and not self.run.plan_steps
+                and response_text
+            ):
+                parsed_steps = self._parse_numbered_plan_steps(response_text)
+                if parsed_steps:
+                    set_plan_steps(self.run, parsed_steps)
+                    advance_phase(self.run, Phase.execute)
+                    self.run.phase = Phase.execute
+                    console.print(
+                        "[green]✓ Parsed numbered plan from response — auto-advanced to execute[/green]"
+                    )
 
             api_today = get_api_spend_today(self.project)
             console.print(
