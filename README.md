@@ -1,4 +1,4 @@
-# Autopilot (`ap`)
+# AI Flow (`flow`)
 
 A cost-aware CLI workflow for AI-assisted development: prompt → patch → PR → review → merge. Optimized for minimal context, controlled token usage, and human-in-the-loop iteration.
 
@@ -6,36 +6,36 @@ A cost-aware CLI workflow for AI-assisted development: prompt → patch → PR �
 
 ## Two billing surfaces
 
-Autopilot tracks two distinct cost surfaces separately — mixing them up produces meaningless numbers:
+AI Flow tracks two distinct cost surfaces separately — mixing them up produces meaningless numbers:
 
-| Surface | Auth | Billing | What ap tracks |
+| Surface | Auth | Billing | What flow tracks |
 |---|---|---|---|
 | **Claude Code sessions** | `claude login` (claude.ai Pro/Max) | Flat subscription — $0 per session | 5-hour quota window msgs + tokens |
-| **ap utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, ci-review) |
+| **flow utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, ci-review) |
 
-**Why the split matters:** Claude Code interactive sessions (the big coding loop) run against your Pro/Max subscription. They cost you $0 marginal, but they burn through your 5-hour message window. The `ap` CLI itself makes a handful of direct SDK calls per PR — those are metered and cost real money (typically cents, Haiku-heavy).
+**Why the split matters:** Claude Code interactive sessions (the big coding loop) run against your Pro/Max subscription. They cost you $0 marginal, but they burn through your 5-hour message window. The `flow` CLI itself makes a handful of direct SDK calls per PR — those are metered and cost real money (typically cents, Haiku-heavy).
 
-**Trust boundary:** If you flip to API mode (`AP_FORCE_API_KEY=1`), set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) — autopilot's gates don't protect against runaway in-session spend. The guards here only gate the ap utility calls.
+**Trust boundary:** If you flip to API mode (`AP_FORCE_API_KEY=1`), set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) — AI Flow's gates don't protect against runaway in-session spend. The guards here only gate the flow utility calls.
 
 ---
 
 ## The problem
 
 - No visibility into subscription quota burn without checking the claude.ai UI
-- No visibility into real API spend for the utility calls (`ap ship`, `ap ci-review`)
+- No visibility into real API spend for the utility calls (`flow ship`, `flow ci-review`)
 - Claude spawns subagents freely — each starts cold and multiplies quota consumption
 - Switching between Opus (planning) and Sonnet (execution) is manual cognitive overhead
 - Creating PRs and triggering code reviews is friction after every task
 - Long conversations bloat context and inflate quota with no structured way to compress
 
-Autopilot treats the model as an **untrusted subprocess**: every constraint is enforced by hooks, not hoped for.
+AI Flow treats the model as an **untrusted subprocess**: every constraint is enforced by hooks, not hoped for.
 
 ---
 
 ## How it works
 
 ```
-ap REPL → Claude Code session (hooks track quota + gate subagents) → ap ship → GH Actions review
+flow REPL → Claude Code session (hooks track quota + gate subagents) → flow ship → GH Actions review
 ```
 
 State lives in an explicit **RunState machine** backed by DuckDB, not Claude's chat history. Every session gets a structured briefing injected — not a transcript. This keeps context cheap, runs resumable, and cost attributable.
@@ -46,11 +46,11 @@ State lives in an explicit **RunState machine** backed by DuckDB, not Claude's c
 plan → execute → verify → ship
 ```
 
-Each phase selects a different model tier and enforces different constraints. Phase transitions are explicit — either from a slash command or from autopilot routing based on task keywords.
+Each phase selects a different model tier and enforces different constraints. Phase transitions are explicit — either from a slash command or from AI Flow routing based on task keywords.
 
 ### Hooks
 
-Three hooks run for `ap` sessions via `~/.claude/settings.json`:
+Three hooks run for `flow` sessions via `~/.claude/settings.json`:
 
 | Hook | File | Purpose |
 |---|---|---|
@@ -58,7 +58,7 @@ Three hooks run for `ap` sessions via `~/.claude/settings.json`:
 | `PreToolUse` | `hooks/pretool.py` | Step counter, bash allowlist, Agent spawn gate, API spend gate, quota warnings |
 | `PreCompact` | `hooks/precompact.py` | Injects custom compaction prompt that preserves RunState artifacts |
 
-Hooks only fire when you launch Claude Code through `ap` — regular `claude` sessions are unaffected.
+Hooks only fire when you launch Claude Code through `flow` — regular `claude` sessions are unaffected.
 
 ---
 
@@ -66,9 +66,9 @@ Hooks only fire when you launch Claude Code through `ap` — regular `claude` se
 
 - [Claude Code](https://claude.ai/code) CLI installed and authenticated (`claude login`)
 - Python 3.9+
-- [`gh`](https://cli.github.com) CLI (for `ap ship` and the GH Actions reviewer)
+- [`gh`](https://cli.github.com) CLI (for `flow ship` and the GH Actions reviewer)
 - A GitHub repo with a remote set as `origin`
-- An Anthropic API key (for ap utility calls only — `ap ship`, `ap ci-review`)
+- An Anthropic API key (for flow utility calls only — `flow ship`, `flow ci-review`)
 
 ---
 
@@ -76,21 +76,21 @@ Hooks only fire when you launch Claude Code through `ap` — regular `claude` se
 
 ```sh
 pip install -e .
-ap init
+flow init
 ```
 
-`ap init` writes the hooks into `~/.claude/settings.json` and creates `~/.autopilot/.env` with a template. Fill in your keys:
+`flow init` writes the hooks into `~/.claude/settings.json` and creates `~/.autopilot/.env` with a template. Fill in your keys:
 
 ```sh
 # ~/.autopilot/.env
-ANTHROPIC_API_KEY=sk-ant-...         # for ap utility calls (ship, ci-review, clarify)
+ANTHROPIC_API_KEY=sk-ant-...         # for flow utility calls (ship, ci-review, clarify)
 AP_PLAN=pro                          # your claude.ai plan: pro | max5 | max20 | api_only
 
 LANGFUSE_PUBLIC_KEY=pk-lf-...        # optional — free at cloud.langfuse.com
 LANGFUSE_SECRET_KEY=sk-lf-...        # optional
 ```
 
-If `ap` isn't found after install, add Python's user bin to your PATH:
+If `flow` isn't found after install, add Python's user bin to your PATH:
 
 ```sh
 echo 'export PATH="$HOME/Library/Python/3.9/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
@@ -103,13 +103,13 @@ echo 'export PATH="$HOME/Library/Python/3.9/bin:$PATH"' >> ~/.zshrc && source ~/
 ### Interactive REPL
 
 ```sh
-ap
+flow
 ```
 
-Type a task in natural language. Autopilot runs a short **structured intake** in the REPL (optional fields), then runs **Claude Code headlessly** (`claude -p` with JSON output): each turn is one bounded agentic pass, the reply is printed in the terminal, and the same Claude session is **resumed** on the next message until you `/done`. Hooks (`PreToolUse`, `Stop`, …) only run when `ap` sets `AP_ACTIVE=1` on that subprocess, so a normal interactive `claude` session elsewhere is unaffected. Subscription quota + API utility spend are still tracked.
+Type a task in natural language. AI Flow runs a short **structured intake** in the REPL (optional fields), then runs **Claude Code headlessly** (`claude -p` with JSON output): each turn is one bounded agentic pass, the reply is printed in the terminal, and the same Claude session is **resumed** on the next message until you `/done`. Hooks (`PreToolUse`, `Stop`, …) only run when `flow` sets `AP_ACTIVE=1` on that subprocess, so a normal interactive `claude` session elsewhere is unaffected. Subscription quota + API utility spend are still tracked.
 
 ```
-ap [plan:sonnet|step:0/30|wt:0.0|api:$0.00|quota:3/45] > add JWT authentication to the API
+flow [plan:sonnet|step:0/30|wt:0.0|api:$0.00|quota:3/45] > add JWT authentication to the API
 
 Quick intake — press Enter to skip any field.
   Acceptance criteria: …
@@ -140,23 +140,23 @@ Quick intake — press Enter to skip any field.
 ### CLI commands
 
 ```sh
-ap                     # launch interactive REPL
-ap status              # quota window + API spend today + active run
-ap stats               # usage breakdown by project
-ap stats --project foo # filter by project
-ap route "review PR"   # recommend model tier for a task description
-ap verify              # run tests/lint for the current project
-ap ship                # verify → AI commit message → git commit → AI PR description → gh pr create
-ap resume [run-id]     # resume an interrupted run (shows picker if no ID given)
-ap serve               # local dashboard on :7331
-ap ci-review --pr 42   # AI code review for a PR (used by GitHub Actions)
+flow                     # launch interactive REPL
+flow status              # quota window + API spend today + active run
+flow stats               # usage breakdown by project
+flow stats --project foo # filter by project
+flow route "review PR"   # recommend model tier for a task description
+flow verify              # run tests/lint for the current project
+flow ship                # verify → AI commit message → git commit → AI PR description → gh pr create
+flow resume [run-id]     # resume an interrupted run (shows picker if no ID given)
+flow serve               # local dashboard on :7331
+flow ci-review --pr 42   # AI code review for a PR (used by GitHub Actions)
 ```
 
 ---
 
 ## Phase routing
 
-Autopilot automatically selects a model based on the current phase. You can override at any time with `/model` or by editing `routing.yaml`.
+AI Flow automatically selects a model based on the current phase. You can override at any time with `/model` or by editing `routing.yaml`.
 
 | Phase | Model | When |
 |---|---|---|
@@ -191,8 +191,8 @@ plan_window_caps:
   max5:  { msgs: 225 }   # Max 5x
   max20: { msgs: 900 }   # Max 20x
 
-# ap utility API spend (hard gate — blocks Agent spawns)
-api_spend_gate_usd: 1.00    # blocks Agent spawns if ap utility $ today >= this
+# flow utility API spend (hard gate — blocks Agent spawns)
+api_spend_gate_usd: 1.00    # blocks Agent spawns if flow utility $ today >= this
 
 allowed_bash_commands:       # allowlist — unlisted commands are blocked
   - git, pytest, python, uv, pip, npm, npx, gh, cat, ls, find, grep ...
@@ -216,13 +216,13 @@ Every Claude Code session is traced to [Langfuse](https://cloud.langfuse.com) (f
 - API spend per utility call (real $)
 - Subagent spawn events (allowed or blocked)
 
-Cost is also stored locally in `~/.autopilot/costs.duckdb` and queryable at any time via `ap stats` — no external dependency required.
+Cost is also stored locally in `~/.autopilot/costs.duckdb` and queryable at any time via `flow stats` — no external dependency required.
 
 ---
 
 ## Cross-repo use
 
-`ap` installs globally. The cost DB at `~/.autopilot/costs.duckdb` and hooks in `~/.claude/settings.json` work across all your projects automatically. Project is identified by git remote URL so quota and spend are attributed correctly per repo.
+`flow` installs globally. The cost DB at `~/.autopilot/costs.duckdb` and hooks in `~/.claude/settings.json` work across all your projects automatically. Project is identified by git remote URL so quota and spend are attributed correctly per repo.
 
 ---
 
@@ -234,13 +234,13 @@ If you want Claude Code itself to bill via the API (instead of riding your subsc
 AP_FORCE_API_KEY=1   # in ~/.autopilot/.env or shell
 ```
 
-The Stop hook will route session tokens through the `api` billing path and compute real USD. **Before doing this, set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) — Claude Code sessions can run 2–10M tokens and ap's step gate doesn't cap in-session spend.**
+The Stop hook will route session tokens through the `api` billing path and compute real USD. **Before doing this, set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) — Claude Code sessions can run 2–10M tokens and flow's step gate doesn't cap in-session spend.**
 
 ---
 
 ## Style
 
-Autopilot injects your personal style into every AI-generated artifact. `ap init` creates `~/.autopilot/style.yaml` with defaults — edit what you care about, set a section to `null` to skip it entirely:
+AI Flow injects your personal style into every AI-generated artifact. `flow init` creates `~/.autopilot/style.yaml` with defaults — edit what you care about, set a section to `null` to skip it entirely:
 
 ```yaml
 commit_message:

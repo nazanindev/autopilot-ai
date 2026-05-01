@@ -1,4 +1,4 @@
-"""ap status and ap stats commands."""
+"""flow status and flow stats commands."""
 import os
 
 from rich.console import Console
@@ -106,7 +106,7 @@ def cmd_status() -> None:
             "",
             *run_lines,
         ]),
-        title="Autopilot Status", border_style="cyan",
+        title="AI Flow Status", border_style="cyan",
     ))
 
 

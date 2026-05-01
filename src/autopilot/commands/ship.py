@@ -1,4 +1,4 @@
-"""ap ship — verify → AI commit message → git commit → AI PR body → gh pr create."""
+"""flow ship — verify → AI commit message → git commit → AI PR body → gh pr create."""
 import os
 import subprocess
 from pathlib import Path

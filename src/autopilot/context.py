@@ -58,7 +58,7 @@ def phase_directive(run: RunState) -> str:
             "- Test or verification steps\n"
             "- Any migration or config changes\n\n"
             "When the plan is complete, call ExitPlanMode with the numbered list. "
-            "Autopilot will parse it, set the step budget, and transition to execute automatically."
+            "AI Flow will parse it, set the step budget, and transition to execute automatically."
         )
 
     if run.phase == Phase.execute:
@@ -82,7 +82,7 @@ def phase_directive(run: RunState) -> str:
 
     if run.phase == Phase.ship:
         return (
-            "You are in the SHIP phase. Run `ap ship` to verify, commit, and open the PR. "
+            "You are in the SHIP phase. Run `flow ship` to verify, commit, and open the PR. "
             "Do not make further code changes."
         )
 

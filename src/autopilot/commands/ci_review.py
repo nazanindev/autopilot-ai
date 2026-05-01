@@ -1,4 +1,4 @@
-"""ap ci-review — two-pass Haiku→Sonnet AI code reviewer for GitHub Actions."""
+"""flow ci-review — two-pass Haiku→Sonnet AI code reviewer for GitHub Actions."""
 import json
 import os
 import subprocess

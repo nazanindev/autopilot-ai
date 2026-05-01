@@ -1,10 +1,10 @@
-"""CLI entry point — `ap` command."""
+"""CLI entry point — `flow` command."""
 import typer
 from typing import Optional
 
 app = typer.Typer(
-    name="ap",
-    help="Autopilot — personal AI dev harness",
+    name="flow",
+    help="AI Flow — personal AI dev harness",
     no_args_is_help=False,
     invoke_without_command=True,
 )
@@ -12,7 +12,7 @@ app = typer.Typer(
 
 @app.callback(invoke_without_command=True)
 def main(ctx: typer.Context) -> None:
-    """Start the Autopilot REPL. Run with no arguments to enter interactive mode."""
+    """Start the AI Flow REPL. Run with no arguments to enter interactive mode."""
     if ctx.invoked_subcommand is None:
         from autopilot.repl import start_repl
         start_repl()
@@ -20,7 +20,7 @@ def main(ctx: typer.Context) -> None:
 
 @app.command()
 def init(force: bool = typer.Option(False, "--force", help="Overwrite existing hooks")) -> None:
-    """Wire Autopilot hooks into ~/.claude/settings.json and create ~/.autopilot/.env."""
+    """Wire AI Flow hooks into ~/.claude/settings.json and create ~/.autopilot/.env."""
     from autopilot.commands.init import cmd_init
     cmd_init(force=force)
 
@@ -86,7 +86,7 @@ def resume(run_id: Optional[str] = typer.Argument(None, help="Run ID to resume (
         for s in r.plan_steps:
             marker = "[green]✓[/green]" if s.get("status") == "done" else "○"
             c.print(f"  {marker} {s['description']}")
-    c.print("\n[dim]Start the REPL with `ap` and use /resume to continue in an interactive session.[/dim]")
+    c.print("\n[dim]Start the REPL with `flow` and use /resume to continue in an interactive session.[/dim]")
 
 
 @app.command(name="ci-review")

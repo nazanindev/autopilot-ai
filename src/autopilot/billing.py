@@ -1,14 +1,14 @@
 """
-Billing utilities shared across ap.
+Billing utilities shared across flow.
 
 Two surfaces:
   subscription  — Claude Code sessions run against claude.ai Pro/Max login.
                   They cost $0 marginal; we track token + message quota instead.
-  api           — ap utility calls (clarify, ship, ci-review) hit the Anthropic
+  api           — flow utility calls (clarify, ship, ci-review) hit the Anthropic
                   API directly with ANTHROPIC_API_KEY. These bill real money
                   (cents per call, Haiku-mostly).
 
-metered_call() wraps every ap-internal SDK call so real API spend is recorded.
+metered_call() wraps every flow-internal SDK call so real API spend is recorded.
 """
 import os
 import uuid

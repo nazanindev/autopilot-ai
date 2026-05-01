@@ -28,9 +28,9 @@ phase_step_budgets:
 # len(plan_steps) * this multiplier (minimum: max_steps_per_run).
 plan_steps_multiplier: 3.0
 
-# ── API spend gate (ap utility calls: clarify, ship, ci-review) ─────────────
+# ── API spend gate (flow utility calls: clarify, ship, ci-review) ─────────────
 # These hit ANTHROPIC_API_KEY and cost real money. Block Agent spawns if
-# today's total ap API spend exceeds this.
+# today's total flow API spend exceeds this.
 api_spend_gate_usd: 1.00
 
 # ── Subscription quota gate (Claude Code sessions) ───────────────────────────
