@@ -20,8 +20,6 @@ AI Flow treats the model as an **untrusted subprocess**: every constraint is enf
 
 ## Harness engineering principles
 
-Design constraints this repo implements (policy outside the model, durable state, explicit completion criteria). Related background: [References](#references).
-
 **Configuration-driven enforcement.** `constraints.yaml` is applied in `PreToolUse` / `Stop` (budgets, bash allowlist, spawn gates, API spend caps). Host-side gates; model output does not bypass them.
 
 **Explicit phase machine, persisted run state.** Phases: `plan → execute → verify → ship`. `RunState` lives in DuckDB; each turn injects a structured briefing (goal, phase, plan steps, artifacts, decisions), not a chat transcript.
