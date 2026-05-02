@@ -1,4 +1,4 @@
-# AI Flow (`flow`)
+# `flow`
 
 CLI **orchestrator** for AI-assisted development: it owns phase transitions, persisted `RunState`, hook-enforced policy, and the utility calls around Claude Code (verify, check, ship, review) — the model session is a **worker** inside that loop, not the whole system.
 
