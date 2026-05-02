@@ -1,6 +1,8 @@
-# AI Flow (`flow`)
+# `flow`
 
-A CLI harness for cost-aware AI-assisted development: prompt → patch → PR → review → merge. Optimized for minimal context, controlled token usage, and human-in-the-loop iteration.
+CLI **orchestrator** for AI-assisted development: it owns phase transitions, persisted `RunState`, hook-enforced policy, and the utility calls around Claude Code (verify, check, ship, review) — the model session is a **worker** inside that loop, not the whole system.
+
+Happy path stays prompt → patch → PR → review → merge; the orchestration layer keeps runs bounded (context, spend, gates, resumability).
 
 ---
 
@@ -16,10 +18,86 @@ AI Flow treats the model as an **untrusted subprocess**: every constraint is enf
 
 ---
 
+## Harness engineering principles
+
+Design constraints this repo implements (policy outside the model, durable state, explicit completion criteria). Related background: [References](#references).
+
+**Configuration-driven enforcement.** `constraints.yaml` is applied in `PreToolUse` / `Stop` (budgets, bash allowlist, spawn gates, API spend caps). Host-side gates; model output does not bypass them.
+
+**Explicit phase machine, persisted run state.** Phases: `plan → execute → verify → ship`. `RunState` lives in DuckDB; each turn injects a structured briefing (goal, phase, plan steps, artifacts, decisions), not a chat transcript.
+
+**Repo-scoped product state.** `features.yaml` holds feature intent and verification commands (`flow features`, `flow init --repo`); versioned with the repo, distinct from session DB.
+
+**Separate implementation and review.** Execute loop vs `flow check` over `git diff HEAD` (rubric, structured output). Blocker findings can require acknowledgement before `/ship`.
+
+**Completion tied to checks.** `flow verify` plus Stop-hook clean-state rules (verify/ship phases) bind “done” to test exit status and working-tree hygiene.
+
+**Two cost surfaces.** Claude Code: subscription quota. `flow` utilities (`ship`, `ci-review`, `check`, …): API-metered USD. Tracked separately.
+
+**Explicit human approvals.** Plan (`/approve`, `/reject`), PR (`/gate pr`), optional checker acknowledgement before ship when policy requires it.
+
+**Orchestrator vs worker session.** The CLI / REPL owns scheduling (phases, utilities, billing hooks, `RunState` I/O). Each Claude Code run is a bounded worker turn under that supervision — not the sole locus of policy or persistence.
+
+### References
+
+1. OpenAI — [*Harness engineering: leveraging Codex in an agent-first world*](https://openai.com/index/harness-engineering/)
+2. Anthropic — [*Building effective agents*](https://www.anthropic.com/research/building-effective-agents/)
+3. Anthropic — [*Harness design for long-running application development*](https://www.anthropic.com/engineering/harness-design-long-running-apps/)
+
+---
+
+## Self-hosted development
+
+Harness changes are exercised on this repo with the same surface users run: `flow` REPL (Claude Code subprocess with hooks), `flow verify`, `flow check`, ship/review paths, and `constraints.yaml` / hook behavior under real sessions. Regressions surface through those entrypoints, not only through README or design notes.
+
+---
+
+## Direction (planned)
+
+Work in progress on the orchestration layer itself:
+
+- **Multi-agent / multi-session coordination** — first-class scheduling, isolation, and budgets when more than one Claude Code session participates in the same run (parallel workers, shared `RunState`, clearer handoffs).
+- **Git worktrees** — run tasks in disposable trees with explicit linkage from `RunState` / verify / check to the correct checkout, so parallel streams do not fight the default working tree.
+
+---
+
 ## How it works
 
 ```
-flow REPL → Claude Code session (hooks track quota + gate subagents) → flow ship → GH Actions review
+flow (orchestrator) → Claude Code worker session (hooks) → flow verify | flow check | flow ship → CI / review
+```
+
+Architecture at a glance — **host** owns state and policy; **worker** is one headless Claude Code turn under hooks; **utilities** are invoked by `flow` outside that subprocess.
+
+```mermaid
+flowchart TB
+  subgraph orch["Orchestrator — flow REPL / CLI"]
+    R["Phases, briefing, RunState I/O"]
+    DB[("DuckDB — RunState")]
+    R <--> DB
+  end
+
+  subgraph worker["Worker — Claude Code subprocess"]
+    CC["Headless session (tools)"]
+    HK["Hooks: PreToolUse · Stop · PreCompact"]
+    CC --- HK
+  end
+
+  CY["constraints.yaml"] --> HK
+
+  subgraph util["Utilities — flow CLI entrypoints"]
+    V["flow verify"]
+    CH["flow check"]
+    SH["flow ship / ci-review"]
+  end
+
+  GIT["git / gh / PR / CI"]
+
+  R --> CC
+  R --> V
+  R --> CH
+  R --> SH
+  SH --> GIT
 ```
 
 State lives in an explicit **RunState machine** backed by DuckDB, not Claude's chat history. Every session gets a structured briefing injected — not a transcript. This keeps context cheap, runs resumable, and cost attributable.
@@ -54,9 +132,9 @@ AI Flow tracks two distinct cost surfaces separately — mixing them up produces
 | Surface | Auth | Billing | What flow tracks |
 |---|---|---|---|
 | **Claude Code sessions** | `claude login` (claude.ai Pro/Max) | Flat subscription — $0 per session | 5-hour quota window msgs + tokens |
-| **flow utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, ci-review) |
+| **flow utility calls** | `ANTHROPIC_API_KEY` | Per-token API billing | Real USD per call (ship, ci-review, check) |
 
-**Why the split matters:** Claude Code interactive sessions (the big coding loop) run against your Pro/Max subscription. They cost you $0 marginal, but they burn through your 5-hour message window. The `flow` CLI itself makes a handful of direct SDK calls per PR — those are metered and cost real money (typically cents, Haiku-heavy).
+**Why the split matters:** Claude Code interactive sessions (the big coding loop) run against your Pro/Max subscription. They cost you $0 marginal, but they burn through your 5-hour message window. The `flow` CLI itself makes direct SDK calls for utilities such as ship, review, and check — those are metered and cost real money (typically cents, Haiku-heavy).
 
 **Trust boundary:** If you flip to API mode (`AP_FORCE_API_KEY=1`), set a workspace spend cap in the [Anthropic console](https://console.anthropic.com) — flow's gates don't protect against runaway in-session spend. The guards here only gate the flow utility calls.
 
@@ -69,7 +147,7 @@ AI Flow tracks two distinct cost surfaces separately — mixing them up produces
 - Python 3.9+
 - [`gh`](https://cli.github.com) CLI (for `flow ship` and the GH Actions reviewer)
 - A GitHub repo with a remote set as `origin`
-- An Anthropic API key (for flow utility calls only — `flow ship`, `flow ci-review`)
+- An Anthropic API key (for flow utility calls only — `flow ship`, `flow ci-review`, `flow check`)
 
 ---
 
@@ -84,7 +162,7 @@ flow init
 
 ```sh
 # ~/.autopilot/.env
-ANTHROPIC_API_KEY=sk-ant-...         # for flow utility calls (ship, ci-review, clarify)
+ANTHROPIC_API_KEY=sk-ant-...         # for flow utility calls (ship, ci-review, check, clarify)
 AP_PLAN=pro                          # your claude.ai plan: pro | max5 | max20 | api_only
 
 LANGFUSE_PUBLIC_KEY=pk-lf-...        # optional — free at cloud.langfuse.com
@@ -146,6 +224,8 @@ Quick intake — press Enter to skip any field.
 | `/ship-branch <name>` | Set or clear branch name override for `/ship` |
 | `/ship-title <title>` | Set or clear PR title override for `/ship` |
 | `/verify` | Run tests/lint for current project |
+| `/check` | Run independent diff checker (`flow check`) |
+| `/ack-check` | Acknowledge checker blockers so `/ship` can proceed |
 | `/ship` | Verify → commit → create PR |
 | `/done` | Mark current run complete |
 | `/status` | Show quota window + API spend + run state |
@@ -161,6 +241,7 @@ flow stats               # usage breakdown by project
 flow stats --project foo # filter by project
 flow route "review PR"   # recommend model tier for a task description
 flow verify              # run tests/lint for the current project
+flow check               # independent reviewer on git diff HEAD (optional --json)
 flow ship                # verify → AI commit message → git commit → AI PR description → gh pr create
 flow ship --branch-name feat/my-name --pr-title "My PR title"
 flow resume [run-id]     # resume an interrupted run (shows picker if no ID given)
@@ -230,7 +311,7 @@ plan_steps_multiplier: 3.0
 plan_approval_gate: true     # require /approve before execute
 pr_approval_gate: true       # require confirmation before /ship
 
-# flow utility API spend gate (ship, ci-review hit ANTHROPIC_API_KEY)
+# flow utility API spend gate (ship, ci-review, check hit ANTHROPIC_API_KEY)
 api_spend_gate_usd: 1.00     # blocks Agent spawns if today's spend >= this
 
 # Subscription quota warning (Claude Code sessions — warns, never hard-blocks)
@@ -263,12 +344,6 @@ Every Claude Code session is traced to [Langfuse](https://cloud.langfuse.com) (f
 - Subagent spawn events (allowed or blocked)
 
 Cost is also stored locally in `~/.autopilot/costs.duckdb` and queryable at any time via `flow stats` — no external dependency required.
-
----
-
-## Cross-repo use
-
-`flow` installs globally. The cost DB at `~/.autopilot/costs.duckdb` and hooks in `~/.claude/settings.json` work across all your projects automatically. Project is identified by git remote URL so quota and spend are attributed correctly per repo.
 
 ---
 
