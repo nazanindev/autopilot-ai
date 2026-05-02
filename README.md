@@ -1,6 +1,8 @@
 # AI Flow (`flow`)
 
-A CLI harness for cost-aware AI-assisted development: prompt → patch → PR → review → merge. Optimized for minimal context, controlled token usage, and human-in-the-loop iteration.
+CLI **orchestrator** for AI-assisted development: it owns phase transitions, persisted `RunState`, hook-enforced policy, and the utility calls around Claude Code (verify, check, ship, review) — the model session is a **worker** inside that loop, not the whole system.
+
+Happy path stays prompt → patch → PR → review → merge; the orchestration layer keeps runs bounded (context, spend, gates, resumability).
 
 ---
 
@@ -18,28 +20,84 @@ AI Flow treats the model as an **untrusted subprocess**: every constraint is enf
 
 ## Harness engineering principles
 
-These ideas shape how `flow` behaves. They are intentional tradeoffs: less magic, more reliability.
+Design constraints this repo implements (policy outside the model, durable state, explicit completion criteria). Related background: [References](#references).
 
-**Enforce with hooks, not prompts.** Budgets, bash allowlists, spawn gates, and spend caps live in `constraints.yaml` and are applied in `PreToolUse` / `Stop`. The model can always *try* something unsafe; the harness decides whether it runs.
+**Configuration-driven enforcement.** `constraints.yaml` is applied in `PreToolUse` / `Stop` (budgets, bash allowlist, spawn gates, API spend caps). Host-side gates; model output does not bypass them.
 
-**State machine over chat history.** Runs follow `plan → execute → verify → ship`. Progress is persisted as **RunState** in DuckDB, not reconstructed from a transcript. Each Claude turn gets a **structured briefing** (goal, phase, plan steps, artifacts, decisions) so context stays small and resumable.
+**Explicit phase machine, persisted run state.** Phases: `plan → execute → verify → ship`. `RunState` lives in DuckDB; each turn injects a structured briefing (goal, phase, plan steps, artifacts, decisions), not a chat transcript.
 
-**Repo as part of the record.** Feature intent and verification commands live in `features.yaml` at the repo root (via `flow features` and `flow init --repo`) so scope and “done” are reviewable in git, not only in the session DB.
+**Repo-scoped product state.** `features.yaml` holds feature intent and verification commands (`flow features`, `flow init --repo`); versioned with the repo, distinct from session DB.
 
-**Worker ≠ checker.** Implementation runs in the execute loop; an independent pass (`flow check`, optional prompt when you enter verify) reviews the **local diff** with a rubric. Blocker-level findings can require explicit acknowledgement before `/ship`, so “looks done” is not the same as “passed review.”
+**Separate implementation and review.** Execute loop vs `flow check` over `git diff HEAD` (rubric, structured output). Blocker findings can require acknowledgement before `/ship`.
 
-**Definition of done includes verification.** `flow verify` and the Stop hook’s clean-state checks (in verify/ship phases) tie completion to tests and a sane working tree, not to the model declaring victory.
+**Completion tied to checks.** `flow verify` plus Stop-hook clean-state rules (verify/ship phases) bind “done” to test exit status and working-tree hygiene.
 
-**Two billing surfaces, honest accounting.** Claude Code sessions consume subscription quota; `flow` utility calls (`ship`, `ci-review`, `check`, …) hit the API and show up as real USD. Tracking them separately avoids misleading dashboards.
+**Two cost surfaces.** Claude Code: subscription quota. `flow` utilities (`ship`, `ci-review`, `check`, …): API-metered USD. Tracked separately.
 
-**Human gates at real decision points.** Plan approval (`/approve` / `/reject`), PR approval (`/gate pr`), and optional checker acknowledgement keep humans in the loop where mistakes are expensive.
+**Explicit human approvals.** Plan (`/approve`, `/reject`), PR (`/gate pr`), optional checker acknowledgement before ship when policy requires it.
+
+**Orchestrator vs worker session.** The CLI / REPL owns scheduling (phases, utilities, billing hooks, `RunState` I/O). Each Claude Code run is a bounded worker turn under that supervision — not the sole locus of policy or persistence.
+
+### References
+
+1. OpenAI — [*Harness engineering: leveraging Codex in an agent-first world*](https://openai.com/index/harness-engineering/)
+2. Anthropic — [*Building effective agents*](https://www.anthropic.com/research/building-effective-agents/)
+3. Anthropic — [*Harness design for long-running application development*](https://www.anthropic.com/engineering/harness-design-long-running-apps/)
+
+---
+
+## Self-hosted development
+
+Harness changes are exercised on this repo with the same surface users run: `flow` REPL (Claude Code subprocess with hooks), `flow verify`, `flow check`, ship/review paths, and `constraints.yaml` / hook behavior under real sessions. Regressions surface through those entrypoints, not only through README or design notes.
+
+---
+
+## Direction (planned)
+
+Work in progress on the orchestration layer itself:
+
+- **Multi-agent / multi-session coordination** — first-class scheduling, isolation, and budgets when more than one Claude Code session participates in the same run (parallel workers, shared `RunState`, clearer handoffs).
+- **Git worktrees** — run tasks in disposable trees with explicit linkage from `RunState` / verify / check to the correct checkout, so parallel streams do not fight the default working tree.
 
 ---
 
 ## How it works
 
 ```
-flow REPL → Claude Code session (hooks track quota + gate subagents) → flow ship → GH Actions review
+flow (orchestrator) → Claude Code worker session (hooks) → flow verify | flow check | flow ship → CI / review
+```
+
+Architecture at a glance — **host** owns state and policy; **worker** is one headless Claude Code turn under hooks; **utilities** are invoked by `flow` outside that subprocess.
+
+```mermaid
+flowchart TB
+  subgraph orch["Orchestrator — flow REPL / CLI"]
+    R["Phases, briefing, RunState I/O"]
+    DB[("DuckDB — RunState")]
+    R <--> DB
+  end
+
+  subgraph worker["Worker — Claude Code subprocess"]
+    CC["Headless session (tools)"]
+    HK["Hooks: PreToolUse · Stop · PreCompact"]
+    CC --- HK
+  end
+
+  CY["constraints.yaml"] --> HK
+
+  subgraph util["Utilities — flow CLI entrypoints"]
+    V["flow verify"]
+    CH["flow check"]
+    SH["flow ship / ci-review"]
+  end
+
+  GIT["git / gh / PR / CI"]
+
+  R --> CC
+  R --> V
+  R --> CH
+  R --> SH
+  SH --> GIT
 ```
 
 State lives in an explicit **RunState machine** backed by DuckDB, not Claude's chat history. Every session gets a structured briefing injected — not a transcript. This keeps context cheap, runs resumable, and cost attributable.
