@@ -50,15 +50,6 @@ Harness changes are exercised on this repo with the same surface users run: `flo
 
 ---
 
-## Direction (planned)
-
-Work in progress on the orchestration layer itself:
-
-- **Multi-agent / multi-session coordination** — first-class scheduling, isolation, and budgets when more than one Claude Code session participates in the same run (parallel workers, shared `RunState`, clearer handoffs).
-- **Git worktrees** — run tasks in disposable trees with explicit linkage from `RunState` / verify / check to the correct checkout, so parallel streams do not fight the default working tree.
-
----
-
 ## How it works
 
 ```
@@ -333,15 +324,30 @@ allowed_write_paths:
 
 ## Observability
 
-Every Claude Code session is traced to [Langfuse](https://cloud.langfuse.com) (free tier available) with:
+Tightening the orchestrator (phases, briefings, hook policy, utilities) requires **closing the loop on worker behavior**: how Claude Code actually runs under our injected context, not only whether a turn finished. That implies durable signals you can slice by project, phase, and run — for example which tool patterns correlate with success, which commands get blocked or retried, where turns stall, and how token and wall-clock cost accrue over a long session.
 
-- Project (derived from `git remote get-url origin`)
-- Phase, run ID, step count
-- Token usage per session (subscription surface: $0, tokens only)
-- API spend per utility call (real $)
-- Subagent spawn events (allowed or blocked)
+**Questions observability should eventually answer well**
 
-Cost is also stored locally in `~/.autopilot/costs.duckdb` and queryable at any time via `flow stats` — no external dependency required.
+- Which tools (Read / Write / Bash / …) dominate time and budget for a given phase?
+- What does the worker attempt that the harness rejects (PreToolUse blocks, spawn denials), and how often?
+- Which turns are fast vs slow for the same phase model (latency outliers, not only token totals)?
+- How do briefing changes or constraint changes correlate with outcome (verify pass, check blockers, ship retries)?
+
+**What is emitted today**
+
+[Langfuse](https://cloud.langfuse.com) (optional, when `LANGFUSE_*` keys are set) only shows **events this harness posts** via the Langfuse SDK. It does **not** auto-instrument Anthropic or Claude Code, and it is **not** a live trace of every model HTTP call inside a worker turn — only **aggregates and milestones** the hooks and run manager send.
+
+Today that stream includes:
+
+- **Run root trace** — start + milestones (`phase:*`, `plan_set`, `run_complete`, `pr_created`, …) from `flow`’s run lifecycle.
+- **Session end roll-up** — when the **Stop** hook runs, one observation per finished Claude Code session with **aggregate** token counts from the hook payload (subscription by default, so $0 in Langfuse cost fields; real USD only if `AP_FORCE_API_KEY=1`).
+- **Subagent gate** — allow/deny + reason from `PreToolUse` when the Agent tool is evaluated.
+
+**DuckDB (`~/.autopilot/costs.duckdb`)** — authoritative for money and quotas: subscription session rows, **and** API-metered `flow` utilities (`ship`, `ci-review`, `check`, …) via `metered_call` (`sessions` with `billing_source=api`). Those utility calls are **not** currently mirrored into Langfuse; `flow stats` reads DuckDB so you can operate with zero Langfuse dependency.
+
+**Gaps (direction, not yet first-class)**
+
+Per-tool traces inside a Claude Code turn (each Bash / Write with outcome and latency), structured hook denials as first-class spans, and richer joins from **prompting + policy version → tool graph** are the next layer for harness iteration. Today’s telemetry is the baseline; expect more granular worker-side events as multi-session orchestration hardens.
 
 ---
 
