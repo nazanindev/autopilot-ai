@@ -37,48 +37,39 @@ Three properties enforced by the harness, not the model:
 
 The **host** owns state and policy; the **worker** is one headless Claude Code turn under hooks; **utilities** are invoked by `flow` outside that subprocess.
 
+### Scaling plan
+
+Map → **N** model-agnostic workers → reduce → host **tools**. Think **N = 1** today (serial Claude turns); [ENGINEERING.md](docs/ENGINEERING.md#map-reduce-scaling-path) carries the rest.
+
 ```mermaid
 flowchart TB
-  subgraph orch["Orchestrator — flow REPL / CLI"]
-    R["Phases, briefing, RunState I/O"]
-    DB[("DuckDB — RunState")]
-    R <--> DB
+  businessLogic["Business logic — rules, budgets, routing"]
+
+  subgraph orchestrator [Orchestrator]
+    mapStep["Map — fan out work items or turns"]
+    stateStore[("Shared state — RunState")]
+    reduceStep["Reduce — merge results, gates, next phase"]
+    mapStep --> stateStore
+    reduceStep --> stateStore
   end
 
-  subgraph worker["Worker — Claude Code subprocess"]
-    CC["Headless session (tools)"]
-    HK["Hooks: PreToolUse · Stop · PreCompact"]
-    CC --- HK
+  subgraph workerGrid [Workers — N backends same contract]
+    w1["Agent runtime 1"]
+    w2["Agent runtime 2"]
+    w3["Agent runtime N"]
   end
 
-  subgraph worker2["Worker — e.g. GPT-4o · 🚧 planned"]
-    CC2["Headless session"]
-    HK2["Same hook interface"]
-    CC2 --- HK2
-  end
+  tools["Tools — verify, check, ship, git or gh"]
 
-  CY["constraints.yaml"] --> HK
-  CY -.-> HK2
-
-  subgraph util["Utilities — flow CLI entrypoints"]
-    V["flow verify"]
-    CH["flow check"]
-    SH["flow ship / ci-review"]
-  end
-
-  GIT["git / gh / PR / CI"]
-
-  R --> CC
-  R -.-> CC2
-  R --> V
-  R --> CH
-  R --> SH
-  SH --> GIT
+  businessLogic --> mapStep
+  mapStep --> w1
+  mapStep --> w2
+  mapStep --> w3
+  w1 --> reduceStep
+  w2 --> reduceStep
+  w3 --> reduceStep
+  reduceStep --> tools
 ```
-
-> Dashed lines indicate planned capability — the orchestrator is designed to be model-agnostic; Claude Code is the first supported worker.
->
-> **Note on enforcement:** current constraints are implemented via Claude Code hooks, which are Claude Code-specific and bypassable outside `flow`. The direction is API-forward enforcement that generalizes across workers. See [ENGINEERING.md](ENGINEERING.md#known-limitations).
 
 State lives in an explicit **RunState machine** backed by DuckDB, not Claude's chat history. Every session gets a structured briefing injected — not a transcript. Context stays cheap, runs are resumable, and cost is attributable per run.
 
@@ -219,4 +210,4 @@ Override at any time with `/model` or by editing `routing.yaml`.
 
 ---
 
-For engineering principles, constraint details, observability design, billing surfaces, and the style system, see [ENGINEERING.md](ENGINEERING.md).
+For engineering principles, constraint details, observability design, billing surfaces, and the style system, see [ENGINEERING.md](docs/ENGINEERING.md).
