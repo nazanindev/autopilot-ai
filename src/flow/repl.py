@@ -450,12 +450,13 @@ class AutopilotREPL:
     def _ship_with_gate(self) -> None:
         """Gate ship command behind explicit PR approval when enabled."""
         import json as _json
-        # Require flow check before ship.
-        if self.run and not self.run.last_check_result:
-            console.print(
-                "[yellow]Run `/check` before shipping — no flow check result on record for this run.[/yellow]"
-            )
-            return
+        # Auto-run check if no result on record yet.
+        if self.run and not self.run.last_check_result and not self.run.check_blockers_acked:
+            console.print("[dim]No check result on record — running /check now…[/dim]")
+            self._run_check()
+            if not self.run.last_check_result:
+                console.print("[yellow]Check did not produce a result. Run `/ack-check` to ship anyway.[/yellow]")
+                return
         # Block on unacknowledged blockers.
         if self.run and not self.run.check_blockers_acked and self.run.last_check_result:
             try:
@@ -566,7 +567,7 @@ class AutopilotREPL:
                 self._ack_check_prompt()
         else:
             if self.run:
-                set_check_acked(self.run, False)
+                set_check_acked(self.run, True)
         return report
 
     def _ack_check_prompt(self) -> None:
@@ -595,7 +596,11 @@ class AutopilotREPL:
             except Exception:
                 pass
         if not has_blockers:
-            console.print("[dim]No pending blocker findings to acknowledge.[/dim]")
+            if not self.run.last_check_result:
+                set_check_acked(self.run, True)
+                console.print("[yellow]No check result on record — acknowledged. You can now run /ship.[/yellow]")
+            else:
+                console.print("[dim]No pending blocker findings to acknowledge.[/dim]")
             return
         set_check_acked(self.run, True)
         console.print("[yellow]Acknowledged flow check blockers. You can now run /ship.[/yellow]")
