@@ -219,11 +219,14 @@ function renderSidebar(status,stats){
   const aBar=aPct>80?'b danger':aPct>50?'b warn':'b';
 
   const projs=[...(stats.projects||[])].sort((a,b)=>(b.sub_tokens||0)-(a.sub_tokens||0)).slice(0,12);
-  const projHtml=projs.map(p=>`
-    <div class="proj-row">
+  const projHtml=projs.map(p=>{
+    const tok=p.sub_tokens||0, sess=p.sessions||1;
+    const perSess=tok>0?` &middot; ${fmtTok(Math.round(tok/sess))}/sess`:'';
+    return`<div class="proj-row">
       <span class="proj-nm" title="${p.project}">${p.project}</span>
-      <span class="proj-st">${fmtTok(p.sub_tokens||0)} tok<br><span class="dim">${p.sessions} sess &middot; ${relAge(p.last_active)} ago</span></span>
-    </div>`).join('')||'<span class="dim" style="font-size:.75rem">No data yet</span>';
+      <span class="proj-st">${fmtTok(tok)} tok${perSess}<br><span class="dim">${p.sessions} sess &middot; ${relAge(p.last_active)} ago</span></span>
+    </div>`;
+  }).join('')||'<span class="dim" style="font-size:.75rem">No data yet</span>';
 
   return`<div class="sidebar">
     <div class="card">
