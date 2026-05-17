@@ -2,9 +2,9 @@
 
 Personal AI dev harness. Each task gets an isolated worktree and runs `plan → execute → verify → ship` automatically.
 
-[Six casino games in 10 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own pipeline.
+Includes sub-agent spawn guardrails, cost controls, context management, and observability metrics + dashboard.
 
-Includes sub-agent spawn guardrails, cost controls, and context management. 
+**Demo:** [Six games in 10 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own pipeline.
 
 ---
 
