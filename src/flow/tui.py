@@ -18,7 +18,7 @@ from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, Label, RichLog, Static
+from textual.widgets import Footer, Header, Input, Label, RichLog, Static, TextArea
 
 if TYPE_CHECKING:
     from flow.repl import AgentSession, FlowOrchestrator
@@ -164,12 +164,63 @@ class SessionPane(Vertical):
             pass
 
 
+# ── Paste modal ───────────────────────────────────────────────────────────────
+
+class PasteModal(Screen):
+    """Multi-line text overlay — paste a block, Ctrl+Enter to submit, Esc to cancel."""
+
+    BINDINGS = [
+        Binding("ctrl+enter", "submit", "Submit", show=True),
+        Binding("escape", "cancel", "Cancel", show=True),
+    ]
+
+    DEFAULT_CSS = """
+    PasteModal {
+        align: center middle;
+    }
+    PasteModal > Vertical {
+        width: 80%;
+        max-width: 100;
+        height: 16;
+        border: solid $accent;
+        background: $surface;
+        padding: 1 2;
+    }
+    PasteModal > Vertical > Label {
+        color: $text-muted;
+        margin-bottom: 1;
+    }
+    PasteModal > Vertical > TextArea {
+        height: 1fr;
+        border: none;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Ctrl+Enter to submit · Esc to cancel")
+            yield TextArea(id="paste-area")
+
+    def on_mount(self) -> None:
+        self.query_one("#paste-area", TextArea).focus()
+
+    def action_submit(self) -> None:
+        text = self.query_one("#paste-area", TextArea).text.strip()
+        self.dismiss(text or None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 # ── Drill-down screen ─────────────────────────────────────────────────────────
 
 class DrillDownScreen(Screen):
     """Full-screen view of one session's output + interactive input."""
 
-    BINDINGS = [Binding("escape", "pop_screen", "Back")]
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+        Binding("ctrl+e", "open_paste", "Paste block", show=True),
+    ]
 
     DEFAULT_CSS = """
     DrillDownScreen {
@@ -246,6 +297,14 @@ class DrillDownScreen(Screen):
 
     def action_pop_screen(self) -> None:
         self.app.pop_screen()
+
+    def action_open_paste(self) -> None:
+        def _handle(text: Optional[str]) -> None:
+            if text:
+                self.session.inject_queue.put(text)
+                log = self.query_one("#drill-log", RichLog)
+                log.write(f"→ injected {len(text)} chars\n")
+        self.app.push_screen(PasteModal(), _handle)
 
     @on(Input.Submitted)
     def on_input(self, event: Input.Submitted) -> None:
@@ -357,6 +416,7 @@ class FlowApp(App):
 
     BINDINGS = [
         Binding("ctrl+q", "quit_flow", "Quit", show=True),
+        Binding("ctrl+e", "open_paste", "Paste block", show=True),
     ]
 
     def __init__(self, orchestrator: "FlowOrchestrator") -> None:
@@ -474,6 +534,19 @@ class FlowApp(App):
         grid.mount(pane)
 
     # ── Input handling ────────────────────────────────────────────────────────
+
+    def action_open_paste(self) -> None:
+        def _handle(text: Optional[str]) -> None:
+            if not text:
+                return
+            self.query_one("#main-input", Input).clear()
+            if text.startswith("/"):
+                self._handle_slash(text)
+            elif not self.orchestrator._try_dispatch_flow_cmd(text):
+                session = self.orchestrator._start_session(text)
+                self.add_session_pane(session)
+                self.notify(f"Session {session.idx} started on {session.branch}", timeout=3)
+        self.push_screen(PasteModal(), _handle)
 
     @on(Input.Submitted, "#main-input")
     def on_main_input(self, event: Input.Submitted) -> None:
