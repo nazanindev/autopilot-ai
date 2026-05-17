@@ -1,12 +1,36 @@
 # `flow`
 
-Personal AI dev harness built on Claude Code. Parallel agents, terminal control room, automatic pipeline from task to PR.
+Personal AI dev harness. Each task gets an isolated worktree and runs `plan → execute → verify → ship` automatically.
+
+[Six casino games in 30 minutes](https://github.com/nazanindev/ai_1.0) — each one a parallel agent, each one its own pipeline.
 
 Includes sub-agent spawn guardrails, cost controls, and context management. 
 
-<img width="3456" height="2094" alt="image" src="https://github.com/user-attachments/assets/47523b9c-fce6-4f91-a212-4b3b80fb8736" />
+---
 
-[Output example 1](https://github.com/nazanindev/ai_1.0/tree/main)
+## What it does
+
+You type a task. `flow` spins up an isolated git worktree, runs it through a full `plan → execute → verify → ship` pipeline, and opens a PR — without you touching it again. Multiple tasks run in parallel. The TUI shows all of them.
+
+```
+[1] plan    ── Architecture question        (Opus)
+[2] execute ── Rate limiting impl           (Sonnet)  step 8/40
+[3] ship    ── PR opened: .../pull/42
+```
+
+---
+
+## How it works
+
+Limits live in `constraints.yaml` and are enforced by a pre-tool hook that runs before every agent action — not in a system prompt. The agent can't reason past them.
+
+**Weighted step budgets.** Every tool call has a cost: `Agent: 5.0`, `Write: 2.0`, `Edit: 1.5`, `Read: 0.25`. Each phase has a budget — plan: 15, execute: 40, verify: 15, ship: 8. When it's spent, the hook blocks.
+
+**Spend gates.** API utility calls are gated at `$1.00` by default. Configurable per project.
+
+**Model routing.** Opus plans, Sonnet executes, Haiku reviews and writes commit messages. Routing is in `routing.yaml` with per-keyword overrides — prefix a task with `architecture:` or `quick:` to change the model without touching config.
+
+**Auto-remediation.** If verify fails, a fix worker spawns, retries up to twice, then surfaces the failure if it can't resolve it.
 
 ---
 
@@ -32,13 +56,13 @@ AP_PLAN=pro                    # pro | max5 | max20 | api_only
 flow
 ```
 
-Type a task, press Enter. Prefix to change behavior:
+Type a task, press Enter. Prefix to route it:
 
 | Prefix | Model | Behavior |
 |---|---|---|
-| _(none)_ | sonnet | Full pipeline: plan → execute → verify → ship, reviewer auto-spawned |
-| `plan: <question>` | opus | Interactive planner — stays alive, responds to your follow-ups |
-| `review: <branch>` | haiku | One-shot diff review |
+| _(none)_ | Sonnet | Full pipeline: plan → execute → verify → ship, reviewer auto-spawned |
+| `plan: <question>` | Opus | Interactive planner — stays alive, responds to follow-ups |
+| `review: <branch>` | Haiku | One-shot diff review |
 
 ### Commands
 
@@ -51,18 +75,18 @@ Type a task, press Enter. Prefix to change behavior:
 | `/resume [run_id]` | Reattach to an interrupted run |
 | `/quit` | Exit, clean up completed worktrees |
 
-Planners show `?` in the pane title when waiting for input — `/view N` to reply.
+Planner sessions show `?` in the pane title when waiting for input.
 
 ---
 
 ## CI / scripting
 
 ```sh
-flow doctor [--fix]              # check hook health
-flow stats                       # cost by project
-flow ship                        # verify → commit → PR
-flow check                       # AI review of local diff
-flow ci-review --pr 42           # for GitHub Actions
+flow doctor [--fix]          # check hook health
+flow stats                   # cost by project
+flow ship                    # verify → commit → PR
+flow check                   # AI review of local diff
+flow ci-review --pr 42       # for GitHub Actions
 ```
 
 ---
