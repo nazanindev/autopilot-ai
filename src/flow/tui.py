@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from textual.events import Key
 from typing import TYPE_CHECKING, Optional
 
 from textual import on, work
@@ -170,6 +171,8 @@ class SubmitArea(TextArea):
     """TextArea that submits on Enter so paste works naturally.
 
     Replaces Input in the input bar. Paste lands multi-line, Enter sends it.
+    TextArea's internal key handler consumes Enter before BINDINGS fire,
+    so we intercept it in on_key instead.
     """
 
     class Submitted(TextArea.Changed):
@@ -178,15 +181,14 @@ class SubmitArea(TextArea):
             super().__init__(area, area.text)
             self.value = value
 
-    BINDINGS = [
-        Binding("enter", "submit_text", "Submit", show=False),
-    ]
-
-    def action_submit_text(self) -> None:
-        text = self.text.strip()
-        if text:
-            self.post_message(self.Submitted(self, text))
-            self.load_text("")
+    def on_key(self, event: Key) -> None:
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            text = self.text.strip()
+            if text:
+                self.post_message(self.Submitted(self, text))
+                self.load_text("")
 
 
 # ── Drill-down screen ─────────────────────────────────────────────────────────
