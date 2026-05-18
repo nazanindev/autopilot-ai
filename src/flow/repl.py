@@ -447,12 +447,20 @@ class FlowOrchestrator:
                 client, COORD_MODEL,
                 run_id=run_id,
                 purpose="coordinator-plan",
-                max_tokens=1500,
+                max_tokens=4096,
                 system=system,
                 messages=[{"role": "user", "content": session.goal}],
             )
             raw = msg.content[0].text if msg.content else ""
             self._session_push(session, f"{raw}\n")
+
+            if msg.stop_reason == "max_tokens":
+                self._session_push(session, "✗ Dispatcher plan truncated — spawn plan too long for token budget\n")
+                _ev("coordinator_failed", {"reason": "max_tokens", "raw": raw[:500]})
+                set_run_status(run_id, RunStatus.failed)
+                with session.lock:
+                    session.status = "failed"
+                return
 
             match = re.search(r'\{.*\}', raw, re.DOTALL)
             if not match:
