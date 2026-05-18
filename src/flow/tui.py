@@ -577,8 +577,9 @@ class FlowApp(App):
             else:
                 idx = int(arg)
                 sessions = self.orchestrator.sessions
-                if 1 <= idx <= len(sessions):
-                    self.push_screen(DrillDownScreen(sessions[idx - 1], self.orchestrator))
+                session = next((s for s in sessions if s.idx == idx), None)
+                if session:
+                    self.push_screen(DrillDownScreen(session, self.orchestrator))
                 else:
                     self.notify(f"No session {idx}", severity="warning")
         elif verb == "/stop":
