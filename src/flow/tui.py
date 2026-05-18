@@ -9,16 +9,19 @@ from __future__ import annotations
 import json
 import threading
 import time
+from textual.events import Key
 from typing import TYPE_CHECKING, Optional
 
 from textual import on, work
 from textual.app import App, ComposeResult
+from textual.message import Message
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, ScrollableContainer
+from textual.containers import Vertical
 from textual.css.query import NoMatches
 from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Footer, Header, Input, Label, RichLog, Static
+from textual.widget import Widget
+from textual.widgets import Footer, Header, Input, Label, RichLog, Static, TextArea
 
 if TYPE_CHECKING:
     from flow.repl import AgentSession, FlowOrchestrator
@@ -60,7 +63,7 @@ class SessionPane(Vertical):
         self._line_buf = ""
 
     def compose(self) -> ComposeResult:
-        type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv"}
+        type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "coordinator": "co"}
         tag = type_labels.get(self.session.session_type, self.session.session_type[:2])
         yield Label(
             f"[bold][{self.session.idx}][/bold] {tag} · {self.session.goal[:35]}",
@@ -93,7 +96,7 @@ class SessionPane(Vertical):
     def refresh_title(self) -> None:
         try:
             label = self.query_one(".pane-title", Label)
-            type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv"}
+            type_labels = {"executor": "ex", "planner": "pl", "reviewer": "rv", "coordinator": "co"}
             tag = type_labels.get(self.session.session_type, self.session.session_type[:2])
             with self.session.lock:
                 st = self.session.status
@@ -123,9 +126,11 @@ class SessionPane(Vertical):
                 icon = "✗"
             branch = self.session.branch
             branch_short = branch[-16:] if len(branch) > 16 else branch
+            pr_url = self.session.pr_url
+            pr_str = f" [bold green]PR#{pr_url.rstrip('/').split('/')[-1]}[/bold green]" if pr_url else ""
             label.update(
-                f"[bold][{self.session.idx}][/bold] {icon} {tag}:{phase[:4]}{elapsed_str} "
-                f"[dim]{branch_short}[/dim] · {self.session.goal[:22]}"
+                f"[bold][{self.session.idx}][/bold] {icon} {tag}:{phase[:4]}{elapsed_str}"
+                f"{pr_str} [dim]{branch_short}[/dim] · {self.session.goal[:22]}"
             )
         except NoMatches:
             pass
@@ -164,12 +169,45 @@ class SessionPane(Vertical):
             pass
 
 
+# ── Submit-on-enter TextArea ──────────────────────────────────────────────────
+
+class SubmitArea(TextArea):
+    """TextArea that submits on Enter so paste works naturally.
+
+    Replaces Input in the input bar. Paste lands multi-line, Enter sends it.
+    TextArea's internal key handler consumes Enter before BINDINGS fire,
+    so we intercept it in on_key instead.
+    """
+
+    class Submitted(Message):
+        """Posted when the user presses Enter to submit."""
+        def __init__(self, area: "SubmitArea", value: str) -> None:
+            super().__init__()
+            self.area = area
+            self.value = value
+
+        @property
+        def control(self) -> "SubmitArea":
+            return self.area
+
+    def on_key(self, event: Key) -> None:
+        if event.key == "enter":
+            event.prevent_default()
+            event.stop()
+            text = self.text.strip()
+            if text:
+                self.post_message(self.Submitted(self, text))
+                self.load_text("")
+
+
 # ── Drill-down screen ─────────────────────────────────────────────────────────
 
 class DrillDownScreen(Screen):
     """Full-screen view of one session's output + interactive input."""
 
-    BINDINGS = [Binding("escape", "pop_screen", "Back")]
+    BINDINGS = [
+        Binding("escape", "pop_screen", "Back"),
+    ]
 
     DEFAULT_CSS = """
     DrillDownScreen {
@@ -184,8 +222,12 @@ class DrillDownScreen(Screen):
     DrillDownScreen > RichLog {
         height: 1fr;
     }
-    DrillDownScreen > Input {
+    DrillDownScreen > SubmitArea {
         dock: bottom;
+        height: 3;
+        border: none;
+        background: $surface;
+        padding: 0 1;
     }
     """
 
@@ -204,18 +246,7 @@ class DrillDownScreen(Screen):
             classes="drill-header",
         )
         yield RichLog(id="drill-log", highlight=False, markup=False, wrap=True)
-        yield Input(placeholder="/prompt <msg> or plain text to inject · Esc to return")
-
-    def on_mount(self) -> None:
-        log = self.query_one("#drill-log", RichLog)
-        buf = ""
-        for chunk in self.session.output_history:
-            buf += chunk
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                log.write(line)
-        self._drill_buf = buf
-        self._start_drain()
+        yield SubmitArea(show_line_numbers=False, language=None, id="drill-input")
 
     def _start_drain(self) -> None:
         def _drain():
@@ -244,30 +275,40 @@ class DrillDownScreen(Screen):
     def on_unmount(self) -> None:
         self._drain_stop.set()
 
+    def on_mount(self) -> None:
+        log = self.query_one("#drill-log", RichLog)
+        buf = ""
+        for chunk in self.session.output_history:
+            buf += chunk
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                log.write(line)
+        self._drill_buf = buf
+        self._start_drain()
+        self.query_one("#drill-input", SubmitArea).focus()
+
     def action_pop_screen(self) -> None:
         self.app.pop_screen()
 
-    @on(Input.Submitted)
-    def on_input(self, event: Input.Submitted) -> None:
+    @on(SubmitArea.Submitted, "#drill-input")
+    def on_drill_input(self, event: SubmitArea.Submitted) -> None:
         text = event.value.strip()
-        event.input.clear()
         if not text or text in ("/back", "b"):
             self.app.pop_screen()
             return
         if text.startswith("/stop"):
             self.orchestrator._stop_session(self.session.idx)
-            log = self.query_one("#drill-log", RichLog)
-            log.write("→ stop signal sent\n")
+            self.query_one("#drill-log", RichLog).write("→ stop signal sent\n")
             return
         if text.startswith("/") and not text.startswith("/prompt "):
-            log = self.query_one("#drill-log", RichLog)
-            log.write("drill-down: /prompt <msg> to inject · /stop · /back to exit\n")
+            self.query_one("#drill-log", RichLog).write(
+                "drill-down: /prompt <msg> to inject · /stop · /back to exit\n"
+            )
             return
         msg = text[8:].strip() if text.startswith("/prompt ") else text
         if msg:
             self.session.inject_queue.put(msg)
-            log = self.query_one("#drill-log", RichLog)
-            log.write(f"→ [queued] {msg}\n")
+            self.query_one("#drill-log", RichLog).write(f"→ [queued] {msg[:80]}{'…' if len(msg) > 80 else ''}\n")
 
 
 # ── Status header ─────────────────────────────────────────────────────────────
@@ -304,12 +345,23 @@ class FlowHeader(Static):
 
 # ── Session grid ──────────────────────────────────────────────────────────────
 
-class SessionGrid(Horizontal):
+class SessionGrid(Widget):
     DEFAULT_CSS = """
     SessionGrid {
         height: 1fr;
+        layout: grid;
+        grid-size: 1;
+    }
+    SessionGrid.multi {
+        grid-size: 2;
     }
     """
+
+    def update_layout(self, count: int) -> None:
+        if count >= 3:
+            self.add_class("multi")
+        else:
+            self.remove_class("multi")
 
 
 # ── Empty state ───────────────────────────────────────────────────────────────
@@ -329,6 +381,7 @@ class EmptyState(Static):
             "Type a task to start.\n"
             "  plan: <question>   — interactive planner (opus)\n"
             "  review: <branch>   — one-shot code review (haiku)\n"
+            "  coord: <goal>      — spawn multiple agents (coordinator)\n"
             "  /dismiss N         — remove a done/failed session\n"
             "  /help              — all commands"
         )
@@ -349,9 +402,10 @@ class FlowApp(App):
         padding: 0 1;
         background: $surface;
     }
-    #input-bar Input {
+    #input-bar SubmitArea {
         border: none;
         background: $surface;
+        padding: 0;
     }
     """
 
@@ -370,15 +424,12 @@ class FlowApp(App):
         yield EmptyState(id="empty-state")
         yield SessionGrid(id="session-grid")
         with Vertical(id="input-bar"):
-            yield Input(
-                placeholder="Type a task, or /help for commands",
-                id="main-input",
-            )
+            yield SubmitArea(show_line_numbers=False, language=None, id="main-input")
 
     def on_mount(self) -> None:
         self.query_one("#session-grid").display = False
         self._refresh_timer = self.set_interval(0.25, self._tick)
-        self.query_one("#main-input", Input).focus()
+        self.query_one("#main-input", SubmitArea).focus()
 
         # Hook health warning
         from flow.commands.doctor import hook_health_ok, hook_health_one_liner
@@ -472,13 +523,13 @@ class FlowApp(App):
         grid.display = True
         pane = SessionPane(session)
         grid.mount(pane)
+        grid.update_layout(len(self.orchestrator.sessions))
 
     # ── Input handling ────────────────────────────────────────────────────────
 
-    @on(Input.Submitted, "#main-input")
-    def on_main_input(self, event: Input.Submitted) -> None:
+    @on(SubmitArea.Submitted, "#main-input")
+    def on_main_input(self, event: SubmitArea.Submitted) -> None:
         text = event.value.strip()
-        event.input.clear()
         if not text:
             return
         if text.startswith("/"):
@@ -564,7 +615,7 @@ class FlowApp(App):
             self.notify(
                 "/view N  /stop [N]  /dismiss N  /prompt N <msg>  /model opus|sonnet|haiku\n"
                 "/no-agents  /budget $X  /test-flow  /sessions  /status  /quit\n"
-                "Prefix tasks: plan: …  review: …",
+                "Prefix tasks: plan: …  review: …  coord: …",
                 title="Commands",
                 timeout=10,
             )
