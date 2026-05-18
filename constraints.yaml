@@ -1,4 +1,5 @@
 max_steps_per_run: 30
+max_turns_per_run: 60
 max_tokens_per_step: 8000
 context_warn_pct: 0.80
 

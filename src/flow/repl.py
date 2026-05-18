@@ -265,10 +265,14 @@ class FlowOrchestrator:
             with session.lock:
                 if session.status == "running":
                     session.status = "done"
+            from flow.tracker import set_run_status, RunStatus
+            set_run_status(session.run.run_id, RunStatus.complete)
         except Exception as e:
             with session.lock:
                 session.status = "failed"
                 session.last_line = str(e)[:100]
+            from flow.tracker import set_run_status, RunStatus
+            set_run_status(session.run.run_id, RunStatus.failed)
             self._remove_worktree(session)
 
     def _executor_worker(self, session: AgentSession) -> None:
@@ -290,9 +294,11 @@ class FlowOrchestrator:
             )
             if r.stdout.strip():
                 self._run_pipeline(session)
+        from flow.tracker import set_run_status, RunStatus
         with session.lock:
             if session.status == "running":
                 session.status = "done"
+        set_run_status(session.run.run_id, RunStatus.complete)
 
     def _planner_worker(self, session: AgentSession) -> None:
         """Interactive planning session: runs forever, responds to /prompt N."""
@@ -883,7 +889,7 @@ class FlowOrchestrator:
             env.pop("ANTHROPIC_API_KEY", None)
 
         c = constraints()
-        max_turns = int(c.get("max_steps_per_run", 30))
+        max_turns = int(c.get("max_turns_per_run", c.get("max_steps_per_run", 50)))
         perm = os.getenv("AP_CLAUDE_PERMISSION_MODE", "bypassPermissions")
         timeout_s = int(os.getenv("AP_CLAUDE_TIMEOUT_S", "600"))
         stream_enabled = os.getenv("AP_CLAUDE_STREAM", "1") != "0"
