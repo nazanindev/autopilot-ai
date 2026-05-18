@@ -8,7 +8,7 @@ Personal AI dev harness. Single-agent pipeline for straightforward tasks, dispat
 
 [GitHub metrics service](https://github.com/nazanindev/ai_1.2) — dispatcher spawned 4 parallel agents (repos, pulls, contributors, webhooks). First real test of the foundation-first spawn pattern.
 
-![flow control room](docs/screenshot.png)
+<img width="3448" height="2090" alt="image" src="https://github.com/user-attachments/assets/b25af610-d4e1-4af9-8a8e-a9f045a7e993" />
 
 ---
 
