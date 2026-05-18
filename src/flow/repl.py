@@ -685,6 +685,35 @@ class FlowOrchestrator:
                 with session.lock:
                     session.run.phase = Phase.execute
                 self._session_push(session, "✓ Plan captured — executing\n")
+            else:
+                # No numbered steps found — re-prompt once explicitly
+                self._session_push(session, "⚠ No plan steps found — re-prompting for numbered plan\n")
+                retry_text = self._launch_claude(
+                    "Output a numbered plan for the task above. "
+                    "Format each step as: '1. description', '2. description', etc. "
+                    "One step per line. No prose before or after.",
+                    session,
+                )
+                parsed = self._parse_numbered_plan_steps(retry_text) if retry_text else []
+                if not parsed:
+                    parsed = self._parse_plan_from_file()
+                if parsed:
+                    set_plan_steps(session.run, parsed)
+                    updated = load_run(session.run.run_id)
+                    if updated:
+                        with session.lock:
+                            session.run = updated
+                    advance_phase(session.run, Phase.execute)
+                    with session.lock:
+                        session.run.phase = Phase.execute
+                    self._session_push(session, "✓ Plan captured — executing\n")
+                else:
+                    self._session_push(session, "✗ No plan produced — session ending without work\n")
+                    with session.lock:
+                        session.status = "failed"
+                    from flow.tracker import set_run_status, RunStatus
+                    set_run_status(session.run.run_id, RunStatus.failed)
+                    return response_text
 
         # Detect STEP_DONE markers in execute phase
         if session.run.phase == Phase.execute and session.run.plan_steps and response_text:
