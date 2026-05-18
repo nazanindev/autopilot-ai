@@ -1,12 +1,14 @@
 # `flow`
 
-Personal AI dev harness. Single-agent pipeline for straightforward tasks, dispatcher mode for larger projects. Dispatcher takes a goal, breaks it into a plan, and dispatches to parallel agents. Hook-based enforcement, event-sourced state, foundation-first spawn pattern.
+AI dev harness. Single-agent pipeline for straightforward tasks, dispatcher mode for larger projects. Dispatcher takes a goal, breaks it into a plan, and dispatches to parallel agents. Hook-based enforcement, event-sourced state, foundation-first spawn pattern.
 
 [6 Python CLI games in 10 minutes](https://github.com/nazanindev/ai_1.0) — each one its own task and parallel agent.
 
 [FastAPI blog API](https://github.com/nazanindev/ai_1.1) — single agent, full CRUD across users / posts / tags with SQLAlchemy and pytest.
 
 [GitHub metrics service](https://github.com/nazanindev/ai_1.2) — dispatcher spawned 4 parallel agents (repos, pulls, contributors, webhooks). First real test of the foundation-first spawn pattern.
+
+[Project Management API](https://github.com/nazanindev/ai_1.3) — 
 
 <img width="3448" height="2090" alt="image" src="https://github.com/user-attachments/assets/b25af610-d4e1-4af9-8a8e-a9f045a7e993" />
 
