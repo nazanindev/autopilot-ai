@@ -140,17 +140,21 @@ class FlowOrchestrator:
         except subprocess.CalledProcessError:
             return Path.cwd()
 
-    def _create_worktree(self, goal: str) -> tuple:
-        """Create a git worktree for a new session. Returns (path, branch_name)."""
+    def _create_worktree(self, goal: str, base_branch: str = None) -> tuple:
+        """Create a git worktree for a new session. Returns (path, branch_name).
+
+        If base_branch is given, the new branch starts from that branch instead of HEAD.
+        Used by the coordinator to start feature agents from the foundation branch.
+        """
         slug = re.sub(r"[^a-z0-9]+", "-", goal.lower())[:25].strip("-")
         name = f"flow-{slug}-{uuid.uuid4().hex[:4]}"
         git_root = self._git_root()
         worktree_dir = git_root / ".claude" / "worktrees"
         worktree_dir.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            ["git", "worktree", "add", str(worktree_dir / name), "-b", name],
-            capture_output=True, text=True,
-        )
+        cmd = ["git", "worktree", "add", str(worktree_dir / name), "-b", name]
+        if base_branch:
+            cmd.append(base_branch)
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             console.print(f"[yellow]Worktree creation failed — using main directory.[/yellow]")
             return git_root, self.branch
@@ -201,7 +205,7 @@ class FlowOrchestrator:
 
     # ── Session lifecycle ─────────────────────────────────────────────────────
 
-    def _start_session(self, goal: str) -> AgentSession:
+    def _start_session(self, goal: str, base_branch: str = None) -> AgentSession:
         # Parse session type from prefix: "plan: ..." | "review: ..." | default executor
         session_type = "executor"
         model_override = None
@@ -226,7 +230,7 @@ class FlowOrchestrator:
             cwd = self._git_root()
             branch = self.branch
         else:
-            cwd, branch = self._create_worktree(display_goal)
+            cwd, branch = self._create_worktree(display_goal, base_branch=base_branch)
 
         init_db()
         run = RunState(goal=display_goal, project=self.project, branch=branch)
@@ -410,22 +414,24 @@ class FlowOrchestrator:
 
         system = (
             "You are a task coordinator for an AI coding harness. "
-            "Each task runs as a separate agent in its own git worktree and opens a PR. "
-            "The PRs are then merged sequentially — so merge conflicts destroy the output.\n\n"
+            "Each task runs as an isolated agent in its own git worktree and opens a PR. "
+            "PRs are merged sequentially — merge conflicts destroy the output.\n\n"
+            "To prevent conflicts, use a FOUNDATION-FIRST pattern when tasks share infrastructure:\n"
+            "- 'foundation': one task that creates ALL shared files (main.py, database.py, "
+            "requirements.txt, config, base models, folder structure). Set to null if not needed.\n"
+            "- 'tasks': feature agents that run IN PARALLEL after the foundation is done. "
+            "Each task must only create/modify its own files — never shared infrastructure.\n\n"
             "Output ONLY valid JSON:\n"
-            '{"tasks": [{"goal": "...", "type": "executor|planner|reviewer", "owns": ["path/to/file.py"]}]}\n\n'
+            '{"foundation": {"goal": "..."} | null, '
+            '"tasks": [{"goal": "...", "type": "executor|planner|reviewer", "owns": ["path/file.py"]}]}\n\n'
             f"Rules:\n"
-            f"- Maximum {max_spawn} tasks\n"
-            "- executor: full pipeline (plan→execute→verify→ship) — use for implementation\n"
-            "- planner: interactive planning only — use for design/architecture questions\n"
-            "- reviewer: one-shot code review — use for review tasks\n"
-            "- CRITICAL: No two tasks may own the same file. Assign every file to exactly one task.\n"
-            "- Shared infrastructure (main.py, database.py, requirements.txt, config, etc.) must be "
-            "owned by exactly ONE task. Other tasks must be told to assume these files exist and "
-            "import from them — they must NOT recreate or modify them.\n"
-            "- Include the file ownership constraint explicitly in each task's goal text: "
-            "e.g. 'Only create app/routes/repos.py and app/models/repo.py. "
-            "Assume app/main.py and app/database.py already exist with standard SQLAlchemy setup.'\n"
+            f"- Maximum {max_spawn} feature tasks (foundation is additional)\n"
+            "- executor: full pipeline (plan→execute→verify→ship)\n"
+            "- planner: interactive planning/architecture only\n"
+            "- reviewer: one-shot code review\n"
+            "- No two tasks may own the same file\n"
+            "- Foundation goal must explicitly list every shared file it creates\n"
+            "- Each feature task goal must say: 'Assume <shared files> exist. Only create <owned files>.'\n"
             "- Output JSON only, no markdown"
         )
 
@@ -435,7 +441,7 @@ class FlowOrchestrator:
                 client, COORD_MODEL,
                 run_id=run_id,
                 purpose="coordinator-plan",
-                max_tokens=1024,
+                max_tokens=1500,
                 system=system,
                 messages=[{"role": "user", "content": session.goal}],
             )
@@ -453,20 +459,23 @@ class FlowOrchestrator:
 
             plan = json.loads(match.group())
             tasks = [t for t in plan.get("tasks", []) if t.get("goal", "").strip()][:max_spawn]
+            foundation_spec = plan.get("foundation")
+
             _ev("coordinator_plan_complete", {
+                "has_foundation": bool(foundation_spec),
                 "task_count": len(tasks),
                 "tasks": [{"goal": t["goal"][:80], "type": t.get("type", "executor")} for t in tasks],
             })
 
-            if not tasks:
-                self._session_push(session, "✗ Empty task list\n")
-                _ev("coordinator_failed", {"reason": "empty_tasks"})
+            if not tasks and not foundation_spec:
+                self._session_push(session, "✗ Empty plan\n")
+                _ev("coordinator_failed", {"reason": "empty_plan"})
                 set_run_status(run_id, RunStatus.failed)
                 with session.lock:
                     session.status = "failed"
                 return
 
-            # Budget gate before spawning
+            # Budget gate
             api_gate = float(os.getenv("AP_BUDGET_USD") or c.get("api_spend_gate_usd", 1.0))
             api_today = get_api_spend_today(self.project)
             if api_today >= api_gate:
@@ -480,23 +489,72 @@ class FlowOrchestrator:
                     session.status = "failed"
                 return
 
-            self._session_push(session, f"\n→ Spawning {len(tasks)} sub-agents:\n")
-            _activity("spawning")
-            prefix_map = {"planner": "plan:", "reviewer": "review:", "executor": ""}
-            for t in tasks:
-                goal_text = t["goal"].strip()
-                task_type = t.get("type", "executor")
-                owns = t.get("owns", [])
-                if owns:
-                    owns_str = ", ".join(owns[:6])
-                    goal_text = f"{goal_text}\n\nFile ownership: you own [{owns_str}]. Do not create or modify any other shared files."
-                prefix = prefix_map.get(task_type, "")
-                full_goal = f"{prefix} {goal_text}".strip() if prefix else goal_text
-                sub = self._start_session(full_goal)
-                _ev("coordinator_spawn", {"sub_run_id": sub.run.run_id, "type": task_type, "goal": t["goal"][:80], "owns": owns})
-                self._session_push(session, f"  [{sub.idx}] {task_type}: {goal_text[:60]}\n")
+            # ── Phase 1: foundation ───────────────────────────────────────────
+            feature_base_branch = None
+            if foundation_spec:
+                foundation_goal = foundation_spec.get("goal", "").strip()
+                self._session_push(session, f"\n→ Phase 1 — foundation: {foundation_goal[:70]}\n")
+                _activity("spawning foundation")
+                foundation_session = self._start_session(foundation_goal)
+                _ev("coordinator_spawn", {
+                    "sub_run_id": foundation_session.run.run_id,
+                    "type": "foundation",
+                    "goal": foundation_goal[:80],
+                })
+                self._session_push(session, f"  [{foundation_session.idx}] foundation spawned — waiting…\n")
 
-            _ev("coordinator_done", {"spawned": len(tasks)})
+                # Poll until foundation is done or failed (10 min timeout)
+                deadline = time.monotonic() + 600
+                while time.monotonic() < deadline:
+                    with foundation_session.lock:
+                        st = foundation_session.status
+                    if st == "done":
+                        feature_base_branch = foundation_session.branch
+                        self._session_push(session, f"  ✓ foundation complete (branch: {feature_base_branch})\n")
+                        _ev("coordinator_foundation_done", {"branch": feature_base_branch})
+                        break
+                    elif st == "failed":
+                        self._session_push(session, "  ✗ foundation failed — aborting feature spawn\n")
+                        _ev("coordinator_failed", {"reason": "foundation_failed"})
+                        set_run_status(run_id, RunStatus.failed)
+                        with session.lock:
+                            session.status = "failed"
+                        return
+                    _activity("waiting for foundation")
+                    time.sleep(3)
+                else:
+                    self._session_push(session, "  ✗ foundation timed out\n")
+                    _ev("coordinator_failed", {"reason": "foundation_timeout"})
+                    set_run_status(run_id, RunStatus.failed)
+                    with session.lock:
+                        session.status = "failed"
+                    return
+
+            # ── Phase 2: feature agents ───────────────────────────────────────
+            if tasks:
+                self._session_push(session, f"\n→ Phase 2 — spawning {len(tasks)} feature agents"
+                    + (f" from {feature_base_branch}" if feature_base_branch else "") + "\n")
+                _activity("spawning features")
+                prefix_map = {"planner": "plan:", "reviewer": "review:", "executor": ""}
+                for t in tasks:
+                    goal_text = t["goal"].strip()
+                    task_type = t.get("type", "executor")
+                    owns = t.get("owns", [])
+                    if owns:
+                        owns_str = ", ".join(owns[:6])
+                        goal_text = (f"{goal_text}\n\nFile ownership: only create/modify "
+                                     f"[{owns_str}]. Do not recreate shared infrastructure.")
+                    prefix = prefix_map.get(task_type, "")
+                    full_goal = f"{prefix} {goal_text}".strip() if prefix else goal_text
+                    sub = self._start_session(full_goal, base_branch=feature_base_branch)
+                    _ev("coordinator_spawn", {
+                        "sub_run_id": sub.run.run_id, "type": task_type,
+                        "goal": t["goal"][:80], "owns": owns,
+                        "base_branch": feature_base_branch,
+                    })
+                    self._session_push(session, f"  [{sub.idx}] {task_type}: {t['goal'][:60]}\n")
+
+            _ev("coordinator_done", {"foundation": bool(foundation_spec), "spawned": len(tasks)})
             set_run_status(run_id, RunStatus.complete)
             with session.lock:
                 session.status = "done"
