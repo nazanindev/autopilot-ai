@@ -331,14 +331,12 @@ class FlowOrchestrator:
                 continue
 
     def _reviewer_worker(self, session: AgentSession) -> None:
-        """One-shot AI code review of a branch or HEAD."""
+        """Subscription-based code review via Claude Code (read-only tools)."""
         target = session.goal.strip() or "HEAD"
         self._session_push(session, f"→ Reviewing {target}...\n")
 
+        # Get diff — prefer gh pr diff when a PR URL is set
         diff = ""
-
-        # Prefer gh pr diff when a PR URL is available — avoids local git diff
-        # failing when the branch lives in a different worktree or is already merged.
         if session.pr_url:
             pr_num = session.pr_url.rstrip("/").split("/")[-1]
             r = subprocess.run(
@@ -369,34 +367,41 @@ class FlowOrchestrator:
                 session.status = "done"
             return
 
-        try:
-            from flow.commands.check import run_check
-            report = run_check(diff_text=diff)
-            overall = report.get("overall", "?")
-            blockers = report.get("blocker_count", 0)
-            warnings_ = report.get("warning_count", 0)
-            self._session_push(
-                session,
-                f"Overall: {overall} | Blockers: {blockers} | Warnings: {warnings_}\n"
-                f"{report.get('summary', '')}\n",
-            )
-            for f in report.get("findings", []):
-                loc = f.get("file", "") or "unknown"
-                if f.get("line"):
-                    loc = f"{loc}:{f['line']}"
-                self._session_push(
-                    session,
-                    f"  [{f['severity']}] {f['title']} — {loc}\n"
-                    f"    {f.get('detail', '')}\n"
-                    f"    → {f.get('action', '')}\n",
-                )
-            with session.lock:
-                session.last_line = f"{overall} | {blockers}B {warnings_}W"
-        except Exception as e:
-            self._session_push(session, f"Review failed: {e}\n")
+        pr_hint = f"\nPR: {session.pr_url}" if session.pr_url else ""
+        review_prompt = f"""You are a thorough, skeptical code reviewer. Find real problems — not style nitpicks.
 
-        with session.lock:
-            session.status = "done"
+Read the diff carefully. Use Read, Grep, and Glob to explore relevant files and understand context before forming conclusions. Look at callers, tests, and related modules.{pr_hint}
+
+**Flag only real issues:**
+- Bugs: null/undefined access, wrong comparisons, off-by-one, type mismatches, missing awaits
+- Security: unvalidated input, injection risks, auth bypass, exposed secrets, missing CSRF, path traversal
+- Missing error handling: uncaught exceptions, unhandled rejections, missing null checks, swallowed errors
+- Race conditions: shared mutable state without locks, TOCTOU vulnerabilities
+- Logic errors: wrong conditions, incorrect algorithm, silent data loss, broken edge cases
+- Broken contracts: API changes without updating callers, schema changes without migrations, removed exports
+
+**Do not flag:** style, formatting, variable naming, line length, import order, minor refactors, personal preference.
+
+**For each real issue, write:**
+`[BLOCKER]` `file:line` — clear description of the problem and why it matters.
+Suggested fix: specific, actionable recommendation.
+
+If there's nothing real to flag: write "LGTM — no issues found."
+
+---
+
+Diff to review:
+```diff
+{diff[:14000]}
+```
+"""
+
+        self._launch_claude(
+            "", session,
+            override_message=review_prompt,
+            allowed_tools=["Read", "Grep", "Glob"],
+            ap_active=False,
+        )
 
     def _dispatcher_worker(self, session: AgentSession) -> None:
         """Plan via Opus, then spawn sub-agents for each task in the plan."""
@@ -837,11 +842,16 @@ class FlowOrchestrator:
 
         pr_match = re.search(r"https?://github\.com/\S+/pull/\d+", ship_output)
         if pr_match:
-            pr_url = pr_match.group(0)
             with session.lock:
-                session.pr_url = pr_url
-                session.last_line = f"PR: {pr_url}"
-            self._ci_review(pr_url, session)
+                session.pr_url = pr_match.group(0)
+                session.last_line = f"PR: {session.pr_url}"
+
+        c = constraints()
+        review_mode = c.get("auto_review", "local")
+        if review_mode in ("local", "both"):
+            self._spawn_reviewer(session)
+        if review_mode in ("gh", "both") and session.pr_url and os.getenv("ANTHROPIC_API_KEY"):
+            self._ci_review(session.pr_url, session)
 
     def _ci_review(self, pr_url: str, session: AgentSession) -> None:
         """Run flow ci-review --pr N after ship, post findings to GH, show summary in TUI."""
@@ -867,31 +877,28 @@ class FlowOrchestrator:
         summary = "\n".join(useful[-6:]) if useful else clean[-300:]
         self._session_push(session, summary + "\n")
 
-    def _spawn_reviewer(self, branch: str, pr_url: str = "") -> AgentSession:
-        """Auto-spawn a reviewer session after a branch ships."""
-        git_root = self._git_root()
+    def _spawn_reviewer(self, parent: AgentSession) -> AgentSession:
+        """Spawn a read-only Claude Code reviewer session for a completed run."""
         init_db()
-        goal = branch
-        run = RunState(goal=goal, project=self.project, branch=self.branch)
+        goal = f"review: {parent.branch}"
+        run = RunState(goal=goal, project=self.project, branch=parent.branch)
         save_run(run)
         trace_run_started(run.run_id, run.project, run.branch, goal)
 
         idx = len(self.sessions) + 1
-        session = AgentSession(
+        rev = AgentSession(
             idx=idx, goal=goal, run=run,
-            project=self.project, branch=self.branch, cwd=git_root,
+            project=self.project, branch=parent.branch,
+            cwd=parent.cwd,
             session_type="reviewer",
-            model_override="claude-haiku-4-5-20251001",
         )
-        if pr_url:
-            session.pr_url = pr_url
-            session.output_queue.put(f"→ Reviewing PR: {pr_url}\n")
-        session.thread = threading.Thread(
-            target=self._session_worker, args=(session,), daemon=True,
+        rev.pr_url = parent.pr_url
+        rev.thread = threading.Thread(
+            target=self._session_worker, args=(rev,), daemon=True,
         )
-        self.sessions.append(session)
-        session.thread.start()
-        return session
+        self.sessions.append(rev)
+        rev.thread.start()
+        return rev
 
     def _auto_remediate_verify(self, output: str, tries_left: int, session: AgentSession) -> bool:
         if tries_left <= 0:
@@ -939,20 +946,29 @@ class FlowOrchestrator:
 
     # ── Claude subprocess ─────────────────────────────────────────────────────
 
-    def _launch_claude(self, task: str, session: AgentSession) -> str:
+    def _launch_claude(
+        self, task: str, session: AgentSession,
+        *,
+        override_message: str = None,
+        allowed_tools: list = None,
+        ap_active: bool = True,
+    ) -> str:
         model = session.model_override or self.model_override or model_for(session.run.phase, session.run.goal)
-        briefing = get_session_briefing(session.run, cwd=session.cwd)
-        directive = phase_directive(session.run)
 
-        initial_message = (
-            f"{briefing}\n"
-            f"**Instructions for this session:**\n{directive}\n\n"
-            f"---\n\n"
-            f"{task}"
-        )
+        if override_message is not None:
+            initial_message = override_message
+        else:
+            briefing = get_session_briefing(session.run, cwd=session.cwd)
+            directive = phase_directive(session.run)
+            initial_message = (
+                f"{briefing}\n"
+                f"**Instructions for this session:**\n{directive}\n\n"
+                f"---\n\n"
+                f"{task}"
+            )
 
         env = os.environ.copy()
-        env["AP_ACTIVE"] = "1"
+        env["AP_ACTIVE"] = "1" if ap_active else "0"
         env["AP_FLOW_HEADLESS"] = "1"
         env["AP_NO_SPAWN"] = "1" if self.no_agents else env.get("AP_NO_SPAWN", "0")
         env["AP_RUN_ID"] = session.run.run_id
@@ -973,10 +989,12 @@ class FlowOrchestrator:
             "--permission-mode", perm,
             "--max-turns", str(max_turns),
         ]
+        if allowed_tools:
+            cmd.extend(["--allowedTools", ",".join(allowed_tools)])
         if stream_enabled:
             cmd.extend(["--verbose", "--include-partial-messages"])
         sid = (session.run.claude_session_id or "").strip()
-        if sid:
+        if sid and override_message is None:
             cmd.extend(["--resume", sid])
 
         self._session_push(
